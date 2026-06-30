@@ -1,0 +1,145 @@
+# RelayBack — Implementation Plan
+
+How we build what `SPEC.md` describes. Work is split into **small context slices** —
+each is sized to fit in a single context window and to end at a clean, committed,
+green-tests state. Track which slice you're on in `PROGRESS.md`.
+
+## Ground rules (see `CLAUDE.md` for full detail)
+
+- **TDD is mandatory for every feature slice.** Write a failing test (RED), make it pass
+  with the simplest code (GREEN), then **refactor** (keep tests green). No production code
+  without a failing test first.
+- One slice at a time. Start a slice by reading `PROGRESS.md` + this file's slice entry.
+  End a slice by updating `PROGRESS.md` (what's done, what's next, any decisions/snags).
+- Pure logic before I/O. Slices are ordered so the easy-to-TDD core comes first; every
+  external dependency lands behind a protocol with a fake.
+- Respect the security invariants (SPEC §4) on every slice.
+
+## Dependency order
+
+```
+S0 bootstrap
+   └─ S1 TOTP ─┐
+   └─ S2 ActionRegistry ─┐
+   └─ S4 OutputFormatter ─┤
+S1 + Clock ─ S3 AuthGuard ─┤
+                           ├─ S8 AppCoordinator ── S10 MenuBar+Settings UI ── S11 lifecycle
+S5 Keychain ───────────────┤
+S6 TelegramClient ─────────┤
+S7 CommandRunner ──────────┤
+S9 AuditLog ───────────────┘
+```
+
+Slices S1–S4 are pure and independent — do them in any order. S5–S7, S9 are I/O behind
+protocols. S8 wires everything. S10–S11 are UI/lifecycle.
+
+---
+
+## Slices
+
+Each slice lists: **Goal**, **Tests first (RED)**, **Done when**. "Done when" always
+includes: tests green, refactor pass done, `PROGRESS.md` updated.
+
+### S0 — Project bootstrap *(scaffolding, no TDD)*
+- **Goal:** Xcode macOS app `RelayBack` + `RelayBackTests` target. Folder structure per
+  SPEC §7. `LSUIElement = YES`, min macOS 14, empty `MenuBarExtra` showing a placeholder.
+  `RelayBack.entitlements` (no sandbox v1). Confirm it builds, launches as a menu-bar icon,
+  and the test target runs one trivial passing test.
+- **Done when:** `xcodebuild` builds app + tests; menu-bar icon appears; PROGRESS updated.
+
+### S1 — TOTP core *(pure)*
+- **Goal:** `TOTP` with `code(secret:at:)` and `validate(_:secret:at:driftSteps:)`
+  (HMAC-SHA1, 6 digits, 30s) via CryptoKit. Base32 secret decode.
+- **Tests first:** RFC 6238 Appendix B known vectors; ±1 step drift accepted, ±2 rejected;
+  invalid base32 handled; wrong code rejected.
+- **Done when:** all vector + edge tests green.
+
+### S2 — Action allowlist & registry *(pure)*
+- **Goal:** `Action` (command, description, executable absolute path, args, timeout) and
+  `ActionRegistry.match(_ text:) -> Action?` (exact leading-token match). A small seed set
+  (`/uptime`, `/disk`, `/whoami`).
+- **Tests first:** exact match; unknown → nil; leading-slash + casing rules; control
+  commands (`/arm` etc.) are NOT actions.
+- **Done when:** match tests green.
+
+### S3 — AuthGuard state machine *(pure, injected Clock)*
+- **Goal:** `Clock` protocol (+ system + test impls). `AuthGuard` holding allowlist + arm
+  state; `authorize(fromId:text:) -> Decision` where Decision ∈ {rejectedUnknownUser,
+  control(.arm/.disarm/.status), disarmed, runAction(Action), unknownCommand}. Implements
+  TOTP `/arm`, `/disarm`, idle timeout, idle-timer reset on authorized action.
+- **Tests first:** unknown id rejected; disarmed blocks actions; `/arm` bad code stays
+  disarmed; `/arm` good code arms; expiry after idle window (advance test clock); action
+  resets idle timer; `/disarm` works; `/status` never executes.
+- **Done when:** full state-machine table green. (Enforces invariant I2.)
+
+### S4 — Output formatter *(pure)*
+- **Goal:** `OutputFormatter.format(CommandResult) -> [OutgoingMessage]` where Outgoing is
+  `.text(String)` (≤4096, split on boundaries) or `.document(name,Data)` when total exceeds
+  a threshold. Includes exit-code + stderr framing.
+- **Tests first:** short output → one text; >4096 → multiple chunks, none over limit;
+  very large → single document; nonzero exit + stderr shown; empty output handled.
+- **Done when:** chunking/threshold tests green.
+
+### S5 — Keychain store *(I/O behind protocol)*
+- **Goal:** `protocol SecretStore { get/set botToken; get/set totpSecret }`, in-memory fake,
+  real `KeychainStore` impl.
+- **Tests first:** against the fake — set/get round-trips, missing → nil, overwrite. (Real
+  Keychain impl is thin; not unit-tested in CI.)
+- **Done when:** fake-backed tests green; real impl compiles. (Invariant I3.)
+
+### S6 — Telegram transport *(I/O behind protocol)*
+- **Goal:** `TelegramModels` (Update, Message, User — Codable). `protocol TelegramTransport`
+  (getUpdates(offset:), sendMessage, sendDocument, setMyCommands). `TelegramClient`
+  URLSession impl with long-poll + offset advance + error backoff.
+- **Tests first:** decode real `getUpdates` JSON fixtures (incl. non-message updates, missing
+  `from`); offset advances to max+1; decode of malformed payload doesn't crash. Use a
+  `URLProtocol` stub or inject a transport double — no live network.
+- **Done when:** decode + offset tests green; client compiles. (FR-1.)
+
+### S7 — Command runner *(I/O behind protocol)*
+- **Goal:** `protocol CommandRunning { run(_ Action) async -> CommandResult }`,
+  `ProcessCommandRunner` using `Process` (absolute path, fixed args, restricted PATH,
+  timeout→terminate, captures stdout/stderr/exit code). `CommandResult` model.
+- **Tests first:** real runner against safe builtins — `/bin/echo` returns stdout + exit 0;
+  a sleep action exceeding a short timeout is killed and reported; nonzero exit captured.
+- **Done when:** runner tests green. (Invariants I1, I4 — assert no shell, no privilege.)
+
+### S8 — AppCoordinator *(integration, all fakes)*
+- **Goal:** Wire transport → AuthGuard → ActionRegistry → CommandRunning → OutputFormatter →
+  transport, plus AuditLog. The orchestration brain. Inject every dependency.
+- **Tests first (with fakes):** authorized + armed action → runner called → formatted reply
+  sent; unknown user → dropped, nothing run, audit notes rejection; disarmed action →
+  "disarmed" reply, runner NOT called; `/arm` flow arms then a following action runs;
+  oversized output → document sent. This is where invariants I1/I2 are proven end-to-end.
+- **Done when:** coordinator scenario tests green.
+
+### S9 — Audit log *(I/O behind protocol)*
+- **Goal:** `protocol AuditSink { append(AuditEntry) }`, formatting pure/testable, real
+  append-only file impl. No secrets in entries.
+- **Tests first:** entry formatting (time, from.id, action/decision, exit code); rejection
+  entries; assert token/secret never appear.
+- **Done when:** formatting tests green; file impl compiles. (FR-8, invariant I3.)
+
+### S10 — Menu bar + Settings UI
+- **Goal:** `MenuBarExtra` window showing arm state + recent audit + quick actions. Settings:
+  token entry (→Keychain), allowlist id management, TOTP secret generate + `otpauth://` QR,
+  login-item toggle. `@Observable` view state bound to coordinator.
+- **Tests first:** view-model logic only (state mapping, validation of id input, QR URL
+  string construction). SwiftUI rendering verified manually via Previews.
+- **Done when:** view-model tests green; UI usable in Previews + running app.
+
+### S11 — Lifecycle & login item
+- **Goal:** Start/stop polling with run state; `SMAppService` launch-at-login toggle wired to
+  Settings; graceful shutdown; backoff/reconnect verified against flaky transport fake.
+- **Tests first:** reconnect/backoff logic (inject failing-then-succeeding transport);
+  start/stop idempotence.
+- **Done when:** lifecycle tests green; app runs unattended across a sleep/wake + network
+  blip without crashing or double-processing updates.
+
+---
+
+## Definition of done (whole project, v1)
+
+All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended
+login-item menu-bar agent, and an operator can `/arm` from a phone and run an allowlisted
+action with output returned — while away from the Mac.
