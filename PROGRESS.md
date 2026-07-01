@@ -61,7 +61,9 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
   must use the same heredoc route.
 - 2026-07-01 — Infra: **Added macOS CI** (`.github/workflows/ci.yml`) — builds + runs
   `RelayBackTests` on a `macos-15` runner (Xcode 16, needed for pbxproj objectVersion 77) on
-  every push/PR, with `CODE_SIGNING_ALLOWED=NO`. Required a **shared scheme**
+  **push to `main` only** (not PRs / feature branches, per user preference; run CI locally on
+  branches). First run went green (CI #1, ~2m17s) with `CODE_SIGNING_ALLOWED=NO` — no signing
+  tweaks needed. Required a **shared scheme**
   (`RelayBack.xcodeproj/xcshareddata/xcschemes/RelayBack.xcscheme`) so headless `xcodebuild
   -scheme RelayBack` resolves on a fresh checkout — Xcode had only generated a per-user scheme.
   Scheme's Test action includes only `RelayBackTests` (UITests target excluded — slow/flaky
