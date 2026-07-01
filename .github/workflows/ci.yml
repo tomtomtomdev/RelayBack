@@ -1,0 +1,49 @@
+name: CI
+
+# Builds the app and runs the RelayBackTests unit suite on a real macOS runner.
+# This is what gives Linux-authored work (e.g. Claude Code web/cloud sessions, which have
+# no Swift toolchain) an actual red/green signal before anything merges.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (macOS)
+    # macos-15 ships Xcode 16, required by the project's objectVersion 77 pbxproj.
+    runs-on: macos-15
+    defaults:
+      run:
+        # The .xcodeproj lives in the nested RelayBack/ directory, not the repo root.
+        working-directory: RelayBack
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build & test
+        run: |
+          xcodebuild test \
+            -project RelayBack.xcodeproj \
+            -scheme RelayBack \
+            -destination 'platform=macOS' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: RelayBack/TestResults.xcresult
+          if-no-files-found: ignore

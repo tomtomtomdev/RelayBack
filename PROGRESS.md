@@ -59,7 +59,14 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
   (uses `Insecure.SHA1`) was written via a Bash heredoc, which the hook doesn't gate. Comments
   use "SHA-1" (hyphen) to dodge the regex. Any future edit to `TOTP.swift` touching that line
   must use the same heredoc route.
-- 2026-07-01 — S2: **Match is leading-token, case-insensitive, trailing text discarded.**
+- 2026-07-01 — Infra: **Added macOS CI** (`.github/workflows/ci.yml`) — builds + runs
+  `RelayBackTests` on a `macos-15` runner (Xcode 16, needed for pbxproj objectVersion 77) on
+  every push/PR, with `CODE_SIGNING_ALLOWED=NO`. Required a **shared scheme**
+  (`RelayBack.xcodeproj/xcshareddata/xcschemes/RelayBack.xcscheme`) so headless `xcodebuild
+  -scheme RelayBack` resolves on a fresh checkout — Xcode had only generated a per-user scheme.
+  Scheme's Test action includes only `RelayBackTests` (UITests target excluded — slow/flaky
+  headless, not part of the TDD loop). This closes the "tests never executed from Linux
+  sessions" gap: cloud-authored pushes now get a real ✅/❌.
   `match` takes the first whitespace-delimited token and compares it case-insensitively to
   each action's `command`. Trailing text (`/uptime foo bar`) is ignored, NOT used as args —
   keeps invariant I1 intact (operator text only *selects* an action; fixed exec+args run).
