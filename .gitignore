@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Xcode — user-specific state (not shared)
+xcuserdata/
+*.xcuserstate
+
+# Build output
+DerivedData/
+build/
+
+# Extracted design bundle — source of truth is RelayBack.zip
+RelayBack_zip_contents/

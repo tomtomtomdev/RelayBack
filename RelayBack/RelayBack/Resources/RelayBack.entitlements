@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- v1 is a non-sandboxed local personal agent (SPEC §8). The App Sandbox
+	     blocks Process spawning, which is the app's core purpose, so it stays
+	     off. Do not enable without revisiting SPEC §8 (guardrail in CLAUDE.md). -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>
