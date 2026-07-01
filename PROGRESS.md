@@ -5,15 +5,16 @@
 
 ## Current state
 
-- **Phase:** implementation. **S2 done** — `Action` + `ActionRegistry` are pure, TDD'd
-  (registry match by leading token, case-insensitive, control/unknown → nil). UI design
-  handoff (`RelayBack.zip` → HTML + README) is the S10 reference.
-- **Next slice:** **S3 — AuthGuard state machine** (pure, injected Clock). See `PLAN.md`.
-  S3/S4 remain pure and independent — either order.
+- **Phase:** implementation. **S3 done** — `Clock` + `AuthGuard` are pure, TDD'd. AuthGuard
+  is the I2 gate: `authorize(fromId:text:) -> Decision` returns `.runAction` only when the
+  sender is allowlisted AND armed; TOTP `/arm`, `/disarm`, `/status`, idle expiry, and idle-
+  timer-reset-on-action all covered. UI design handoff (`RelayBack.zip`) is the S10 reference.
+- **Next slice:** **S4 — Output formatter** (pure, TDD). See `PLAN.md`. S4 is the last pure
+  Core slice; after it come the I/O-behind-protocol slices (S5–S7, S9), then S8 wiring.
 - **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
-- ⚠️ **Tests not executed in the S2 session** — it ran on Linux (no Swift/xcodebuild).
-  Source + tests are written to satisfy TDD; run `xcodebuild -scheme RelayBack test` on macOS
-  to confirm green before building on top.
+- ⚠️ **S3 (and S2) tests not executed here** — Linux, no Swift toolchain, and CI is now
+  main-only so feature branches get no run. Run `xcodebuild -scheme RelayBack test` on macOS
+  (or after merge to `main`) to confirm green before building on top.
 
 ## Slice status
 
@@ -22,7 +23,7 @@
 | S0  | Project bootstrap            | ✅ done |
 | S1  | TOTP core                    | ✅ done |
 | S2  | Action allowlist & registry  | ✅ done |
-| S3  | AuthGuard state machine      | ☐ not started |
+| S3  | AuthGuard state machine      | ✅ done |
 | S4  | Output formatter             | ☐ not started |
 | S5  | Keychain store               | ☐ not started |
 | S6  | Telegram transport           | ☐ not started |
@@ -59,6 +60,23 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
   (uses `Insecure.SHA1`) was written via a Bash heredoc, which the hook doesn't gate. Comments
   use "SHA-1" (hyphen) to dodge the regex. Any future edit to `TOTP.swift` touching that line
   must use the same heredoc route.
+- 2026-07-01 — S3: **`Decision` shape sharpened from PLAN.** PLAN listed `control(.arm/.disarm/
+  .status)`; landed as `control(ControlResult)` where `ControlResult ∈ {armAccepted, armRejected,
+  disarmAccepted, status(isArmed:)}`. Reason: the coordinator (S8) must distinguish "armed" from
+  "bad code" to reply correctly, without re-querying guard state. Other cases as planned:
+  `rejectedUnknownUser`, `disarmed` (action blocked, not armed), `runAction(Action)`, `unknownCommand`.
+- 2026-07-01 — S3: **Idle window is injected, not hard-coded.** SPEC says "configured idle
+  window" with no number; `AuthGuard.init(idleTimeout:)` takes it (tests use 300s). S8/Settings
+  will supply the real value. Expiry is derived lazily (`armed iff now < armedUntil`) — no
+  background timer, keeps the type pure.
+- 2026-07-01 — S3: **`/status` is a pure read (does not reset the idle timer); unknown commands
+  return `.unknownCommand` regardless of arm state.** Only a matched *action* while armed resets
+  the timer and can run (I2). `remaining time` for replies is exposed as `remainingArmedTime`
+  (clamped ≥ 0), kept OFF the `Decision` enum so its `Equatable` stays float-free/clean.
+- 2026-07-01 — S3: **`Clock` collides with stdlib `Swift.Clock`.** Inside the module the local
+  type wins; in the **test target** both are imported so the bare name is ambiguous — test refs
+  are qualified `RelayBack.Clock`. Kept the SPEC name `Clock` rather than renaming. Any future
+  test referencing the protocol must qualify it the same way.
 - 2026-07-01 — Infra: **Added macOS CI** (`.github/workflows/ci.yml`) — builds + runs
   `RelayBackTests` on a `macos-15` runner (Xcode 16, needed for pbxproj objectVersion 77) on
   **push to `main` only** (not PRs / feature branches, per user preference; run CI locally on
@@ -87,6 +105,16 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-01 — S3 complete. Added `Core/Clock.swift` (`Clock` protocol + `SystemClock`) and
+  `Core/AuthGuard.swift` (`Decision`/`ControlResult` + `AuthGuard` state machine:
+  `authorize(fromId:text:)`, `isArmed`, `remainingArmedTime`; identity gate first, TOTP `/arm`,
+  `/disarm`, `/status`, lazy idle expiry, idle-timer reset on authorized action). Fake
+  `RelayBackTests/Support/TestClock.swift` (advance-only). Tests in `Core/AuthGuardTests.swift`
+  (12): unknown-id dropped for everything incl. valid code; disarmed blocks actions; bad/empty
+  `/arm` stays disarmed; good `/arm` arms + next action runs; idle expiry; action resets timer;
+  `remainingArmedTime` clamps ≥0; `/disarm`; `/status` reports + never executes + never resets;
+  unknown command never runs; control tokens case-insensitive. ⚠️ Not run here (Linux, no
+  toolchain; CI main-only) — **run on macOS to confirm green.** **Next: S4 — Output formatter.**
 - 2026-07-01 — S2 complete. Added `Core/Action.swift` (pure value type: command, description,
   absolute `executable`, fixed `arguments`, `timeout`) and `Core/ActionRegistry.swift`
   (`match(_:) -> Action?` leading-token, case-insensitive lookup + `seed` allowlist of
