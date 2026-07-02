@@ -5,17 +5,18 @@
 
 ## Current state
 
-- **Phase:** implementation. **S4 done** — `CommandResult` + `OutputFormatter` are pure, TDD'd.
-  Formatter frames `exit N` + stdout + stderr, chunks at 4096 on newline boundaries (hard-splits
-  over-long lines), and falls back to a single `output.txt` document above the threshold.
-  **All four pure Core slices (S1–S4) are now complete.** UI handoff (`RelayBack.zip`) → S10 ref.
-- **Next slice:** first I/O slice — any of **S5 Keychain / S6 Telegram / S7 Command runner /
-  S9 Audit log** (each is I/O behind a protocol with a fake; independent, any order). Then **S8**
-  wires everything. See `PLAN.md`. Suggested next: **S5 — Keychain store** (smallest, unblocks S8).
+- **Phase:** implementation. **S6 done** — `TelegramModels` (pure Codable wire types + decode
+  + offset advance) behind `TelegramTransport` protocol, with thin `TelegramClient` (URLSession)
+  (FR-1). Pure decode/offset TDD'd; real client verified by compile + one `URLProtocol` smoke
+  test (no live network). The long-poll *loop* + backoff are deferred to S8/S11 (tested against
+  the transport fake there).
+- **Next slice:** remaining independent I/O slices — **S7 Command runner / S9 Audit log**
+  (each is I/O behind a protocol with a fake; any order). Then **S8** wires everything (needs
+  S5–S7 + S9). See `PLAN.md`. Suggested next: **S7 — Command runner**.
 - **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
-- ⚠️ **S1–S3 verified green via CI on `main`** (run #2, 34 tests). **S4 not yet CI-verified** —
-  it's on the feature branch and CI is main-only. Run `xcodebuild -scheme RelayBack test` on
-  macOS, or merge to `main` to get the CI run, before relying on S4.
+- ✅ **S1–S6 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
+  suite = **60 tests / 9 suites** passing (S6 added 10 model tests + 1 client smoke test).
+  (CI remains push-to-`main`-only.)
 
 ## Slice status
 
@@ -26,8 +27,8 @@
 | S2  | Action allowlist & registry  | ✅ done |
 | S3  | AuthGuard state machine      | ✅ done |
 | S4  | Output formatter             | ✅ done |
-| S5  | Keychain store               | ☐ not started |
-| S6  | Telegram transport           | ☐ not started |
+| S5  | Keychain store               | ✅ done |
+| S6  | Telegram transport           | ✅ done |
 | S7  | Command runner               | ☐ not started |
 | S8  | AppCoordinator               | ☐ not started |
 | S9  | Audit log                    | ☐ not started |
@@ -42,6 +43,70 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 - 2026-06-30 — Design locked: allowlist-only execution, TOTP arm/disarm, personal local
   (non-sandboxed) install. Build split into TDD slices S0–S11.
+- 2026-07-02 — S6: **Models are `Decodable` (+`Equatable`), not full `Codable`, and prefixed
+  `Telegram…`.** PLAN says "TelegramModels (Update, Message, User — Codable)". Landed as
+  `TelegramUpdate` / `TelegramMessage` / `TelegramUser` / `TelegramChat` — prefixed to avoid
+  clashing with common names (`Update`/`Message`/`User`), and `TelegramChat` added because
+  replies need `chat.id` (auth still uses `from.id` only — I2). Decodable-only is the honest
+  type: the app *decodes* updates from Telegram and never sends these back. `BotCommand` is the
+  one Encodable wire type (sent via `setMyCommands`). Models carry only the consumed fields
+  (`update_id`, `from.id`, `chat.id`, `text`); `Decodable` ignores unknown keys, so real
+  payloads decode fine. `from` and `message` are optional, mirroring the API (channel posts have
+  no `from`; non-message updates have no `message`).
+- 2026-07-02 — S6: **Decode + offset are pure statics on `TelegramUpdate`, not a separate
+  namespace.** `TelegramUpdate.decodeBatch(from:)` (unwraps the `{ok,result}` envelope,
+  `.convertFromSnakeCase`) and `TelegramUpdate.nextOffset(after:in:)` are the TDD'd surface.
+  `nextOffset` returns `max(current, maxId+1)` — FR-1 "never reprocess" *and* never rewind on a
+  stale/out-of-order batch; empty batch leaves the offset unchanged. Malformed JSON *throws*
+  (never traps), so the poll loop can back off rather than crash.
+- 2026-07-02 — S6: **Long-poll loop + backoff deferred to S8/S11.** PLAN S6 lists "long-poll +
+  offset advance + error backoff" under `TelegramClient`, but per CLAUDE the real I/O impl stays
+  thin, and PLAN S11 already tests backoff/reconnect against the *transport fake*. So the client
+  does single requests only (`getUpdates` passes a `timeout` param for the server-side long
+  poll); the offset-advancing, backing-off *loop* is built above the protocol in S8/S11 where
+  it's unit-testable without network. No `FakeTelegramTransport` yet — it belongs to S8, the
+  first slice that drives the protocol (TDD: no untested support code).
+- 2026-07-02 — S6: **`TelegramTransport` takes primitives, not `OutgoingMessage`.**
+  `getUpdates(offset:)`, `sendMessage(chatId:text:)`, `sendDocument(chatId:filename:data:)`,
+  `setMyCommands([BotCommand])` — a faithful thin mirror of the Bot API. The coordinator (S8)
+  bridges `OutputFormatter`'s `OutgoingMessage` (.text/.document) to these calls.
+- 2026-07-02 — S6: **Real `TelegramClient` verified by compile + one `URLProtocol` smoke test
+  (no live network).** `init(token:session:longPollTimeout:) throws` (empty/invalid token →
+  `TelegramError.emptyToken`); injectable `URLSession` lets the smoke test stub HTTP. Smoke test
+  covers `getUpdates` endpoint/method → response body → `decodeBatch`; `sendMessage` /
+  `sendDocument` (multipart) / `setMyCommands` are compile-verified only. **I3:** the bot token
+  is embedded in each request URL — that URL/token is never logged and `TelegramError` never
+  carries it (only a status code or Telegram's own `description`).
+- 2026-07-02 — S5: **Naming reconciled — protocol `SecretStore`, real impl `KeychainStore`,
+  fake `InMemorySecretStore`.** PLAN S5 names the protocol `SecretStore`; SPEC §7 names the
+  component `KeychainStore`. Both are honored: `SecretStore` is the abstraction decision logic
+  depends on; `KeychainStore` is its real backing; `InMemorySecretStore` is the test fake.
+- 2026-07-02 — S5: **Interface is throwing methods, not settable properties.** Landed as
+  `botToken() throws -> String?` / `setBotToken(_:) throws` (and TOTP equivalents), sharpening
+  PLAN's "get/set" phrasing: Keychain I/O genuinely fails (locked keychain, OSStatus), and a
+  security app must surface that rather than swallow it in a non-throwing property setter.
+  `nil` = delete; a missing secret reads back as `nil` (not an error).
+- 2026-07-02 — S5: **Types — `botToken: String?`, `totpSecret: Data?`.** TOTP secret is the raw
+  decoded bytes, matching what `AuthGuard`/`TOTP` consume (no re-decode round-trip). The S10
+  Settings UI base32-encodes those bytes for the `otpauth://` QR. Bot token is inherently a
+  String (used in the API URL path); Keychain stores it UTF-8-encoded under the hood.
+- 2026-07-02 — S5: **Real `KeychainStore` is compile-verified only (per PLAN/CLAUDE — no test
+  writes the real Keychain).** Generic-password items, service `com.RelayBack`, accounts
+  `botToken`/`totpSecret`, `kSecAttrAccessibleAfterFirstUnlock` (readable by the background
+  agent once the user has logged in), update-then-add upsert (avoids duplicate-item error on
+  overwrite). Uses the **default/legacy macOS keychain** — no data-protection keychain, so no
+  `keychain-access-groups` entitlement is needed for the local non-sandboxed v1. Runtime
+  behavior is validated manually via the Settings UI in S10. All contract behavior is pinned
+  by `SecretStoreTests` against the fake, which the real impl must match.
+- 2026-07-02 — S5: **`KeychainError.unexpectedStatus(OSStatus)` carries the status only, never
+  a secret value (I3).** The testable I3 surface at this layer is the protocol seam (secrets
+  read/written only through `SecretStore`) plus the valueless error type. The end-to-end
+  "secret never logged / never sent to Telegram" assertion is deferred to S8/S9, where secrets
+  actually flow through the coordinator + audit log (PLAN S9 already specifies that test).
+- 2026-07-02 — S5: New `Storage/` folders (`RelayBack/Storage/`, `RelayBackTests/Storage/`)
+  were created lazily with the first real source file — auto-included via the file-system-
+  synchronized group (objectVersion 77), no pbxproj edit needed. Fake lives in
+  `RelayBackTests/Support/` alongside `TestClock`; tests in `RelayBackTests/Storage/`.
 - 2026-07-01 — S0: **Sandbox disabled** (`ENABLE_APP_SANDBOX = NO`) — required so `Process`
   can spawn (SPEC §8 / invariant I4). `RelayBack.entitlements` (app-sandbox=false) lives at
   `RelayBack/Resources/` and is verified *not* bundled into the .app.
@@ -117,6 +182,29 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-02 — S6 complete. Added `Telegram/TelegramModels.swift` (`TelegramUpdate`/`Message`/
+  `User`/`Chat` Decodable+Equatable; `TelegramUpdate.decodeBatch(from:)` + `nextOffset(after:in:)`),
+  `Telegram/TelegramTransport.swift` (protocol: `getUpdates`/`sendMessage`/`sendDocument`/
+  `setMyCommands` + `BotCommand`), `Telegram/TelegramClient.swift` (thin URLSession impl,
+  `throws` init, JSON + multipart requests, `ok`/HTTP-status checks, `TelegramError`). Tests:
+  `RelayBackTests/Telegram/TelegramModelsTests.swift` (10 — decode message updates, non-message
+  update → nil message, message w/o `from` → nil sender, empty result, malformed + truncated
+  throw, offset = max+1 / order-independent / empty-unchanged / never-backward) and
+  `TelegramClientSmokeTests.swift` (1 — `URLProtocol` stub, getUpdates endpoint→decode wiring,
+  no network). Ran RED (types missing) → GREEN → refactor on macOS: **60 tests / 9 suites green**.
+  New `Telegram/` folders auto-included via file-system-synchronized group (objectVersion 77) —
+  no pbxproj edit (as in S5). **Next: S7 — Command runner** (or S9 Audit log) before S8 wires all.
+- 2026-07-02 — S5 complete. First I/O slice. Added `Storage/SecretStore.swift` (protocol:
+  throwing `botToken()/setBotToken(_:)` + `totpSecret()/setTOTPSecret(_:)`; `nil` deletes) and
+  `Storage/KeychainStore.swift` (real generic-password impl, service `com.RelayBack`,
+  `AfterFirstUnlock`, update-then-add upsert, `KeychainError.unexpectedStatus`). Fake
+  `RelayBackTests/Support/InMemorySecretStore.swift`. Tests in
+  `RelayBackTests/Storage/SecretStoreTests.swift` (7): missing→nil (both); botToken round-trip;
+  totpSecret Data round-trip; overwrite last-wins; nil deletes (both); the two secrets are
+  independent. Ran full RED→GREEN→refactor on macOS: RED (types missing) → GREEN (fake) →
+  KeychainStore added (compiles) → **49 tests / 7 suites green**. Real Keychain impl is
+  compile-verified only (no test writes the real Keychain). **Next: S6 Telegram, S7 Command
+  runner, or S9 Audit log** (independent I/O slices) before S8 wires everything.
 - 2026-07-01 — S4 complete. Added `Core/CommandResult.swift` (pure `exitCode`/`stdout`/`stderr`)
   and `Core/OutputFormatter.swift` (`OutgoingMessage` enum + `format(_:) -> [OutgoingMessage]`:
   frame exit+stdout+stderr, chunk at 4096 on newline boundaries w/ hard-split, `output.txt`
