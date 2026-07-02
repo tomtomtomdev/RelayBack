@@ -5,17 +5,18 @@
 
 ## Current state
 
-- **Phase:** implementation. **S6 done** — `TelegramModels` (pure Codable wire types + decode
-  + offset advance) behind `TelegramTransport` protocol, with thin `TelegramClient` (URLSession)
-  (FR-1). Pure decode/offset TDD'd; real client verified by compile + one `URLProtocol` smoke
-  test (no live network). The long-poll *loop* + backoff are deferred to S8/S11 (tested against
-  the transport fake there).
-- **Next slice:** remaining independent I/O slices — **S7 Command runner / S9 Audit log**
-  (each is I/O behind a protocol with a fake; any order). Then **S8** wires everything (needs
-  S5–S7 + S9). See `PLAN.md`. Suggested next: **S7 — Command runner**.
+- **Phase:** implementation. **S7 done** — `CommandRunning` protocol + real `ProcessCommandRunner`
+  (`Process`, absolute path + fixed args, restricted PATH, timeout→terminate, stdout/stderr/exit
+  captured) (FR-5). The runner's logic *is* the real impl, so per CLAUDE it's tested directly
+  against safe builtins (the one allowed real-runner exception), and those tests pin invariants
+  **I1** (args never shell-interpreted) and **I4** (non-root, restricted env). No `CommandRunning`
+  fake yet — it belongs to S8, the first slice that drives the protocol.
+- **Next slice:** **S9 — Audit log** (last independent I/O slice: protocol + fake + append-only
+  file impl). Then **S8 — AppCoordinator** wires everything (needs S5–S7 + S9). See `PLAN.md`.
+  Suggested next: **S9 — Audit log**.
 - **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
-- ✅ **S1–S6 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
-  suite = **60 tests / 9 suites** passing (S6 added 10 model tests + 1 client smoke test).
+- ✅ **S1–S7 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
+  suite = **67 tests / 10 suites** passing (S7 added 7 runner tests + 1 suite).
   (CI remains push-to-`main`-only.)
 
 ## Slice status
@@ -29,7 +30,7 @@
 | S4  | Output formatter             | ✅ done |
 | S5  | Keychain store               | ✅ done |
 | S6  | Telegram transport           | ✅ done |
-| S7  | Command runner               | ☐ not started |
+| S7  | Command runner               | ✅ done |
 | S8  | AppCoordinator               | ☐ not started |
 | S9  | Audit log                    | ☐ not started |
 | S10 | Menu bar + Settings UI       | ☐ not started |
@@ -43,6 +44,41 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 - 2026-06-30 — Design locked: allowlist-only execution, TOTP arm/disarm, personal local
   (non-sandboxed) install. Build split into TDD slices S0–S11.
+- 2026-07-02 — S7: **`CommandRunning.run` is non-throwing; every failure folds into a
+  `CommandResult`.** PLAN specifies `run(_ Action) async -> CommandResult`. So a launch failure
+  (bad path / not executable) returns `exitCode 127` + a stderr note rather than throwing, and a
+  timeout returns `exitCode 124` (coreutils `timeout(1)` convention) + a `[timed out after Ns;
+  process terminated]` stderr note. Rationale: the coordinator (S8) then always has exactly one
+  thing to format, deliver, and audit — no separate error channel. This *defines* the timeout
+  framing S4 deliberately left open ("S7/S8 can extend later"); consistent with SPEC FR-5
+  ("killing it at the timeout") — no SPEC/PLAN edit needed.
+- 2026-07-02 — S7: **Execution hygiene is concrete here (SPEC §4.4 / I4).** The child gets
+  `environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]` only — a restricted PATH and **no
+  inherited operator environment**. `ProcessCommandRunner.restrictedPath` is exposed so a test can
+  assert `/usr/bin/env` prints exactly that one line. Runs as the current (non-root) user; no
+  privilege API is touched (I4). Timeout kill is **SIGTERM only** (`process.terminate()`) — fine
+  for v1's fast read-only allowlist; SIGKILL escalation for a SIGTERM-ignoring child is a noted
+  future hardening (untested → not added, per "don't generalize ahead of tests").
+- 2026-07-02 — S7: **The real runner is tested directly (the one CLAUDE-sanctioned exception).**
+  Unlike S5/S6 (thin impl + smoke test behind a fake), the runner's spawn/capture/timeout logic
+  *is* the real `Process` impl — there's no pure logic to fake — so `CommandRunnerTests` drives it
+  against safe builtins: `/bin/echo` (stdout+exit0), `/usr/bin/false` (exit 1), `/bin/ls` bad path
+  (stderr + nonzero), `/bin/sleep 5`@0.3s (killed <4s, sentinel+note), plus **I1** (`/bin/echo
+  "$HOME && echo pwned"` → verbatim, no expansion/chaining) and **I4** (`id -u` ≠ 0; `env` = only
+  restricted PATH). All short-lived — no long-running real process. The `CommandRunning` *fake*
+  is deferred to S8 (first slice to drive the protocol), mirroring S6's no-fake-until-driven rule.
+  Pipes are drained concurrently off the cooperative pool (`DispatchQueue.global`) so a chatty
+  child can't fill a pipe buffer and deadlock while we await exit.
+- 2026-07-02 — S7: **Isolation left at the project default (`SWIFT_DEFAULT_ACTOR_ISOLATION =
+  MainActor`, Swift 5 mode).** Every type is `@MainActor` by default; async `#expect` autoclosures
+  therefore emit Swift-6-mode *warnings* (not errors) accessing value-type properties — a
+  pre-existing codebase-wide posture (S6's async smoke test hits the same class). `run`'s blocking
+  work is explicitly dispatched off-main via `DispatchQueue.global` + continuations, so main is
+  never blocked and tests pass. The real actor/concurrency model (SPEC §7: "`actor` for stateful
+  I/O") is an S8 decision — deliberately not making an inconsistent `nonisolated` change here.
+- 2026-07-02 — S7: New `Execution/` folders (`RelayBack/Execution/`, `RelayBackTests/Execution/`)
+  auto-included via the file-system-synchronized group (objectVersion 77) — no pbxproj edit
+  (as in S5/S6). `CommandResult` already lives in `Core/` (S4 decision); the runner produces it.
 - 2026-07-02 — S6: **Models are `Decodable` (+`Equatable`), not full `Codable`, and prefixed
   `Telegram…`.** PLAN says "TelegramModels (Update, Message, User — Codable)". Landed as
   `TelegramUpdate` / `TelegramMessage` / `TelegramUser` / `TelegramChat` — prefixed to avoid
@@ -182,6 +218,18 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-02 — S7 complete. Added `Execution/CommandRunning.swift` (protocol: non-throwing
+  `run(_ Action) async -> CommandResult`) and `Execution/ProcessCommandRunner.swift` (real `Process`
+  impl: absolute path + fixed args → execve, `PATH`-only restricted env, concurrent pipe drain,
+  timeout race via `TaskGroup` → `terminate()`, `timeoutExitCode 124` / `launchFailureExitCode 127`).
+  Tests: `RelayBackTests/Execution/CommandRunnerTests.swift` (7 — echo stdout+exit0; `false` exit 1;
+  `ls` bad path stderr+nonzero; sleep-5 under 0.3s timeout killed <4s w/ sentinel+note; **I1** args
+  never shell-interpreted; **I4** non-root `id -u`; restricted-env `env`). Oracles verified on-box
+  first. Ran RED (types missing) → GREEN → refactor on macOS: **67 tests / 10 suites green** (one
+  self-inflicted test-assertion bug caught+fixed at RED→GREEN: a redundant `!contains("pwned\n")`
+  that the literal payload trivially matched; exact-equality is the real I1 proof). `Execution/`
+  folders auto-included (objectVersion 77) — no pbxproj edit. **Next: S9 — Audit log**, then S8 wires
+  transport→AuthGuard→registry→runner→formatter→transport + audit.
 - 2026-07-02 — S6 complete. Added `Telegram/TelegramModels.swift` (`TelegramUpdate`/`Message`/
   `User`/`Chat` Decodable+Equatable; `TelegramUpdate.decodeBatch(from:)` + `nextOffset(after:in:)`),
   `Telegram/TelegramTransport.swift` (protocol: `getUpdates`/`sendMessage`/`sendDocument`/
