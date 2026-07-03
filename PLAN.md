@@ -273,6 +273,31 @@ is reference-only — not part of the build.)
 
 ---
 
+### S14 — Connection-lifecycle logging (persistent)
+- **Goal:** A persistent, append-only record of the poll loop's transport health, separate from
+  the command audit log (FR-8, which is scoped to received commands). The loop logs only
+  *transitions* — reaching Telegram (`connected`) and losing it (`disconnected`) — so a healthy
+  loop doesn't spam the file and an outage leaves one clear line. Backs the future S13f Connection
+  pane with real history.
+- **New seams (pure + thin I/O, with a fake):**
+  - `ConnectionEvent` / `ConnectionLogEntry` (pure line rendering) + `ConnectionSink` protocol.
+  - `ConnectionReason.from(Error)` — maps a transport error to a SHORT, **secret-free** reason
+    derived from the error type/code only (never its description — a `URLError` can carry the
+    token-bearing request URL). **I3.**
+  - `FileConnectionLog` — thin append-only file sink (`~/Library/Application Support/RelayBack/
+    connection.log`).
+  - Shared helpers extracted (refactor): `LogText` (timestamp + sanitize) and `AppendOnlyFile`
+    (best-effort append), now used by both the audit and connection logs.
+- **Tests first (RED):** `ConnectionLogEntry.line` rendering (connected/disconnected + newline
+  neutralization); `ConnectionReason.from` never leaks the URL/token (I3); `FileConnectionLog`
+  append-only smoke; `PollLoop` logs disconnect→reconnect as transitions and "connected" only once
+  while healthy.
+- **Done when:** suite green with the new tests; the running agent writes `connection.log`; no
+  security invariant (SPEC §4) weakened.
+- ✅ **Done** — 158 tests / 23 suites green.
+
+---
+
 ## Definition of done (whole project, v1)
 
 All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended

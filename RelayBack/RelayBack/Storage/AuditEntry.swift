@@ -37,48 +37,22 @@ struct AuditEntry: Equatable {
     let fromId: Int64
     let event: AuditEvent
 
-    /// The one-line, append-only rendering: `<ISO8601-UTC> from=<id> <detail>`.
+    /// The one-line, append-only rendering: `<ISO8601-UTC> from=<id> <detail>`. Timestamp and
+    /// free-text sanitizing are shared with the connection log via `LogText`.
     var line: String {
-        "\(Self.timestampFormatter.string(from: timestamp)) from=\(fromId) \(detail)"
+        "\(LogText.timestamp(timestamp)) from=\(fromId) \(detail)"
     }
 
     private var detail: String {
         switch event {
         case let .actionRan(command, exitCode):
-            return "action=\(Self.sanitized(command)) exit=\(exitCode)"
+            return "action=\(LogText.sanitized(command)) exit=\(exitCode)"
         case let .control(text):
-            return #"control="\#(Self.sanitized(text))""#
+            return #"control="\#(LogText.sanitized(text))""#
         case let .rejected(reason):
-            return #"rejected="\#(Self.sanitized(reason))""#
+            return #"rejected="\#(LogText.sanitized(reason))""#
         }
     }
-
-    /// Neutralizes characters that would break the one-line-per-entry guarantee or the quoted
-    /// field: newlines/CR/tab collapse to a space, and inner double quotes become single quotes.
-    private static func sanitized(_ text: String) -> String {
-        var result = ""
-        result.reserveCapacity(text.count)
-        for character in text {
-            switch character {
-            case "\n", "\r", "\t":
-                result.append(" ")
-            case "\"":
-                result.append("'")
-            default:
-                result.append(character)
-            }
-        }
-        return result
-    }
-
-    /// Fixed UTC ISO-8601 (`2026-07-03T15:04:05Z`). Stable across locales/timezones so audit
-    /// lines are comparable and greppable.
-    private static let timestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter
-    }()
 }
 
 /// The append-only audit seam. The coordinator (S8) hands every received command's outcome to a

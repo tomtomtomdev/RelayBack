@@ -88,7 +88,10 @@ final class AppRuntime {
             self?.menuBar.status = statusOf(coordinator)   // reflect the drop immediately
         }
 
-        let loop = PollLoop(transport: client, handler: coordinator)
+        let loop = PollLoop(transport: client,
+                            handler: coordinator,
+                            connectionLog: FileConnectionLog(fileURL: Self.connectionLogURL()),
+                            clock: clock)
         pollLoop = loop
         loop.start()
 
@@ -123,8 +126,17 @@ final class AppRuntime {
 
     /// The append-only audit log location under Application Support (FR-8).
     private static func auditLogURL() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        supportDirectory().appending(path: "RelayBack/audit.log")
+    }
+
+    /// The append-only connection-lifecycle log location under Application Support (kept separate
+    /// from the command audit log so each stays single-purpose).
+    private static func connectionLogURL() -> URL {
+        supportDirectory().appending(path: "RelayBack/connection.log")
+    }
+
+    private static func supportDirectory() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return base.appending(path: "RelayBack/audit.log")
     }
 }

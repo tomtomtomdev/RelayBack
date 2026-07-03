@@ -30,8 +30,10 @@ struct PollLoopTests {
     private func makeLoop(_ transport: FakeTelegramTransport,
                           handler: UpdateHandling,
                           backoff: Backoff = Backoff(),
-                          sleep: @escaping (TimeInterval) async throws -> Void = { _ in }) -> PollLoop {
-        PollLoop(transport: transport, handler: handler, backoff: backoff, sleep: sleep)
+                          sleep: @escaping (TimeInterval) async throws -> Void = { _ in },
+                          connectionLog: ConnectionSink = InMemoryConnectionSink()) -> PollLoop {
+        PollLoop(transport: transport, handler: handler, backoff: backoff,
+                 sleep: sleep, connectionLog: connectionLog)
     }
 
     // MARK: - One poll cycle
@@ -99,6 +101,49 @@ struct PollLoopTests {
         #expect(recorder.delays == [1, 2])               // backoff after the 1st and 2nd failure
         #expect(spy.handled.map(\.updateId) == [5])      // recovered and processed the update once
         #expect(loop.offset == 6)
+    }
+
+    // MARK: - Connection-lifecycle logging (persistent)
+
+    @Test func runLogsDisconnectThenReconnectAsTransitions() async {
+        let transport = FakeTelegramTransport()
+        transport.getUpdatesScript = [
+            .failure(FakeTransportError.down),
+            .failure(FakeTransportError.down),
+            .updates([update(5)]),
+            // subsequent polls run past the script and block until the loop is stopped
+        ]
+        let recovered = AsyncSignal()
+        transport.onScriptExhausted = { recovered.fire() }
+        let connectionLog = InMemoryConnectionSink()
+        let loop = makeLoop(transport, handler: SpyUpdateHandler(), connectionLog: connectionLog)
+
+        loop.start()
+        await recovered.wait()
+        loop.stop()
+
+        // One disconnect (on the first failure), one reconnect (on recovery) — no duplicate line
+        // for the second consecutive failure. Only transitions are logged.
+        #expect(connectionLog.entries.map(\.event) == [
+            .disconnected(reason: "transport error"),
+            .connected,
+        ])
+    }
+
+    @Test func runLogsConnectedOnceWhileHealthy() async {
+        let transport = FakeTelegramTransport()
+        transport.getUpdatesScript = [.updates([update(5)]), .updates([])]   // two healthy polls
+        let idle = AsyncSignal()
+        transport.onScriptExhausted = { idle.fire() }
+        let connectionLog = InMemoryConnectionSink()
+        let loop = makeLoop(transport, handler: SpyUpdateHandler(), connectionLog: connectionLog)
+
+        loop.start()
+        await idle.wait()
+        loop.stop()
+
+        // Repeated successful polls do not spam the log — a single "connected" transition.
+        #expect(connectionLog.entries.map(\.event) == [.connected])
     }
 
     // MARK: - Start/stop idempotence

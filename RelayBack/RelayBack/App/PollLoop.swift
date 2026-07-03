@@ -29,6 +29,8 @@ final class PollLoop {
     private let handler: UpdateHandling
     private let backoff: Backoff
     private let sleep: (TimeInterval) async throws -> Void
+    private let connectionLog: ConnectionSink
+    private let clock: Clock
 
     /// The next `getUpdates` offset — one past the highest `update_id` processed so far (FR-1).
     private(set) var offset: Int64 = 0
@@ -42,11 +44,15 @@ final class PollLoop {
          backoff: Backoff = Backoff(),
          sleep: @escaping (TimeInterval) async throws -> Void = { seconds in
              try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
-         }) {
+         },
+         connectionLog: ConnectionSink,
+         clock: Clock = SystemClock()) {
         self.transport = transport
         self.handler = handler
         self.backoff = backoff
         self.sleep = sleep
+        self.connectionLog = connectionLog
+        self.clock = clock
     }
 
     /// Starts the polling task. Idempotent: a second call while already running is a no-op, so there
@@ -72,13 +78,25 @@ final class PollLoop {
     /// the in-flight call and ends the loop cleanly — no crash across a sleep/wake or network blip.
     private func run() async {
         var failures = 0
+        // Tracks transport health so only *transitions* are logged: nil until the first outcome,
+        // then true (reachable) / false (down). A healthy loop never re-logs "connected", and an
+        // ongoing outage never re-logs "disconnected" on each retry.
+        var isHealthy: Bool?
         while !Task.isCancelled {
             do {
                 try await pollOnce()
                 failures = 0
+                if isHealthy != true {
+                    logConnection(.connected)
+                    isHealthy = true
+                }
             } catch is CancellationError {
                 break
             } catch {
+                if isHealthy != false {
+                    logConnection(.disconnected(reason: ConnectionReason.from(error)))
+                    isHealthy = false
+                }
                 failures += 1
                 do {
                     try await sleep(backoff.delay(afterFailures: failures))
@@ -87,6 +105,10 @@ final class PollLoop {
                 }
             }
         }
+    }
+
+    private func logConnection(_ event: ConnectionEvent) {
+        connectionLog.append(ConnectionLogEntry(timestamp: clock.now, event: event))
     }
 
     /// One poll cycle: fetch the batch at the current offset, dispatch each update in order, and

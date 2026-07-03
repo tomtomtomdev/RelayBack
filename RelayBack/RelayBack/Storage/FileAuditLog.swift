@@ -22,21 +22,6 @@ struct FileAuditLog: AuditSink {
     }
 
     func append(_ entry: AuditEntry) {
-        guard let data = (entry.line + "\n").data(using: .utf8) else { return }
-
-        let manager = FileManager.default
-        if !manager.fileExists(atPath: fileURL.path) {
-            try? manager.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? data.write(to: fileURL, options: .atomic)
-            return
-        }
-
-        guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: data)
+        AppendOnlyFile.append(entry.line, to: fileURL)
     }
 }

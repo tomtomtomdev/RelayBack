@@ -5,6 +5,23 @@
 
 ## Current state
 
+- **S14 done — persistent connection-lifecycle logging.** The poll loop now keeps a persistent,
+  append-only record of transport health at `~/Library/Application Support/RelayBack/connection.log`,
+  separate from the command audit log (FR-8 = received commands only). New pure types (TDD'd):
+  `Storage/ConnectionLogEntry` (`ConnectionEvent = .connected | .disconnected(reason:)` + one-line
+  `line` rendering), `ConnectionSink` protocol, `ConnectionReason.from(Error)` (maps a transport
+  error to a SHORT, **secret-free** reason from the error type/code only — a `URLError`'s
+  token-bearing URL never reaches the log; **I3**). Thin real sink `Storage/FileConnectionLog`.
+  `PollLoop` gained an injected `connectionLog` + `clock` and logs only **transitions** (tracked via
+  an `isHealthy: Bool?`): first success / recovery → `.connected`, first failure of an outage →
+  `.disconnected` — a healthy loop never re-logs, an ongoing outage never re-logs. `AppRuntime`
+  wires the real `FileConnectionLog` + shared `SystemClock`. **Refactor:** extracted `Storage/LogText`
+  (timestamp + sanitize) and `Storage/AppendOnlyFile` (best-effort append); `AuditEntry`/`FileAuditLog`
+  now delegate to them (behavior unchanged — audit tests stayed green). This is the persistence the
+  future **S13f Connection pane** can read; no core/security change to the run path.
+- ✅ **S14 verified green on macOS** (this session): full `RelayBackTests` suite = **158 tests /
+  23 suites** passing (added `ConnectionLogTests` (6) + 2 `PollLoopTests` transition tests). App
+  builds clean.
 - **S13b done — armed popover content (actions + last result + disarm).** The armed popover now
   matches the handoff: below the ARMED pill + countdown chip (S13a), an "Armed by operator…"
   subtitle, an **ALLOWLISTED ACTIONS** list of read-only cards (command in accent blue + registry
@@ -140,6 +157,7 @@
 | S13d | · Settings sidebar shell + Security pane         | ☐ not started |
 | S13e | · Allowlist pane + General pane                  | ☐ not started |
 | S13f | · Audit pane + Connection pane                   | ☐ not started |
+| S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
@@ -147,6 +165,26 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-03 — S14: **Connection log is a SEPARATE file, not folded into the audit log.** SPEC
+  FR-8's `audit.log` is scoped to *received commands*; connection lifecycle (connect/disconnect) is
+  a different concern the planned S13f Connection pane surfaces separately, so it gets its own
+  `connection.log`. Keeps each log single-purpose and greppable, and avoids widening the `AuditEvent`
+  taxonomy (whose narrowness is what structurally enforces I3).
+- 2026-07-03 — S14: **The poll loop logs only TRANSITIONS, and disconnect reasons are secret-free
+  by construction (I3).** `run()` tracks `isHealthy: Bool?` so `.connected`/`.disconnected` is logged
+  only when health flips — a healthy long-poll (a line every ~30s) doesn't spam the file, and a
+  prolonged outage yields one line, not one per retry. The reason comes from `ConnectionReason.from`,
+  which reduces an error to `"network error <code>"` / `"transport error"` from the type/code only —
+  it never interpolates the error's description, because a `URLError` can carry the failing request
+  URL (which embeds the bot token in its path) in its userInfo. Asserted by
+  `disconnectReasonNeverLeaksTheFailingURLOrToken`.
+- 2026-07-03 — S14: **Extracted `LogText` + `AppendOnlyFile` rather than duplicate the audit impl.**
+  Two append-only line logs now exist, so the ISO-8601 timestamp + free-text sanitize (`LogText`)
+  and the create-or-seek-and-append file write (`AppendOnlyFile`) were pulled out and shared;
+  `AuditEntry`/`FileAuditLog` were refactored onto them with no behavior change (the existing
+  `AuditLogTests` stayed green, proving it). `PollLoop` takes an injected `Clock` (default
+  `SystemClock`) for deterministic timestamps under test; timestamps aren't asserted, the recorded
+  events are.
 - 2026-07-03 — S13b: **The popover's "Last result" card shows command output — and that does not
   touch I3.** I3 governs the audit log and Telegram replies (no output/secrets there); the
   last-result terminal card is *local UI* the design handoff explicitly specifies, fed by a
@@ -497,6 +535,21 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 ## Log
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
+
+- 2026-07-03 — S14 complete (new slice, beyond original PLAN). Persistent connection-lifecycle
+  logging. Pure/TDD: `Storage/ConnectionLogEntry.swift` (`ConnectionEvent`, `ConnectionLogEntry.line`,
+  `ConnectionSink`, `ConnectionReason.from`) + `Storage/FileConnectionLog.swift` (thin append-only
+  sink). `PollLoop` gained injected `connectionLog: ConnectionSink` + `clock: Clock`; `run()` logs
+  transitions only via an `isHealthy: Bool?` flag. `AppRuntime` wires `FileConnectionLog(fileURL:
+  connectionLogURL())` (→ `RelayBack/connection.log`) + shared clock. Refactor: extracted
+  `Storage/LogText.swift` + `Storage/AppendOnlyFile.swift`; `AuditEntry`/`FileAuditLog` delegate to
+  them. Tests: `ConnectionLogTests` (6: connected/disconnected line, newline neutralize, I3 no-token
+  leak, non-URL error → generic, file append-only smoke) + `InMemoryConnectionSink` fake + 2
+  `PollLoopTests` (disconnect→reconnect transitions; "connected" once while healthy). Ran RED
+  (`cannot find type 'ConnectionSink'`) → GREEN → refactor on macOS: **158 tests / 23 suites green**
+  (was 150/22; +8, +1 suite). App builds clean. New files auto-included (objectVersion 77) — no
+  pbxproj edit. Added S14 to PLAN.md + slice table. **Next: S13c** (recent-activity color coding) or
+  S13f (Audit + Connection panes — the Connection pane can now read `connection.log`).
 
 - 2026-07-03 — S13b complete. Armed popover content. Pure/TDD: `Features/MenuBar/ActionSummary.swift`
   (command + description only — I1 at the UI edge) + `Features/MenuBar/LastResultPresentation.swift`
