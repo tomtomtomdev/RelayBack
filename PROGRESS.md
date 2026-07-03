@@ -5,21 +5,24 @@
 
 ## Current state
 
-- **Phase:** implementation. **S9 done** — `AuditSink` protocol + pure `AuditEntry`/`AuditEvent`
-  (one-line-per-command formatting) + real append-only `FileAuditLog` (FR-8). The pure `line`
-  rendering is the TDD'd core; it pins invariant **I3** by construction (entry carries only
-  timestamp/`from.id`/action+exit/reason — never output or a secret) and neutralizes newlines so
-  one received command can never inject extra audit lines. `FileAuditLog` is smoke-tested against
-  an isolated temp file (safe I/O — no Keychain/network/persistent side effects) proving
-  append-only round-trip. No `AuditSink` fake yet — it belongs to S8, the first slice that drives
-  the protocol (same no-fake-until-driven rule as S5–S7).
-- **Next slice:** **S8 — AppCoordinator** — wires transport → AuthGuard → ActionRegistry →
-  CommandRunning → OutputFormatter → transport + AuditSink. All dependency slices (S5–S7, S9) are
-  now done; S8 is unblocked. Build the `FakeTelegramTransport`, `FakeCommandRunner`, and
-  `InMemoryAuditSink` fakes here (first slice to drive those protocols). See `PLAN.md`.
+- **Phase:** implementation. **S8 done** — `AppCoordinator` wires the whole run path:
+  transport update → `AuthGuard` (identity + arm gate, which does the `ActionRegistry` match) →
+  `CommandRunning` (only on `.runAction`) → `OutputFormatter` → transport reply → `AuditSink`
+  (every outcome). It owns no I/O — every dependency is an injected protocol. Tested end-to-end
+  against three new fakes; this slice is the executable proof of **I2** (runner reached ONLY for
+  an allowlisted + armed sender — every other decision leaves `runCount == 0`), **I1** (runner
+  gets the registry `Action`, not operator text), and **I3** (run audited by command token + exit
+  code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
+  and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
+  `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
+- **Next slice:** **S10 — Menu bar + Settings UI** — `MenuBarExtra` window (arm state + recent
+  audit + quick actions) and Settings (token→Keychain, allowlist id mgmt, TOTP secret generate +
+  `otpauth://` QR, login-item toggle), `@Observable` view state. TDD the view-model logic only
+  (state mapping, id-input validation, QR URL string); SwiftUI rendering verified via Previews.
+  (S11 lifecycle/polling loop follows.) See `PLAN.md`.
 - **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
-- ✅ **S1–S9 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
-  suite = **75 tests / 11 suites** passing (S9 added 8 audit tests + 1 suite).
+- ✅ **S1–S9 + S8 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
+  suite = **84 tests / 12 suites** passing (S8 added 9 coordinator tests + 1 suite).
   (CI remains push-to-`main`-only.)
 
 ## Slice status
@@ -34,7 +37,7 @@
 | S5  | Keychain store               | ✅ done |
 | S6  | Telegram transport           | ✅ done |
 | S7  | Command runner               | ✅ done |
-| S8  | AppCoordinator               | ☐ not started |
+| S8  | AppCoordinator               | ✅ done |
 | S9  | Audit log                    | ✅ done |
 | S10 | Menu bar + Settings UI       | ☐ not started |
 | S11 | Lifecycle & login item       | ☐ not started |
@@ -45,6 +48,35 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-03 — S8: **`AppCoordinator` is a MainActor class, not a bespoke `actor`.** SPEC §7 says
+  "actor for stateful I/O"; landed as a `final class` under the project's default actor isolation
+  (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, Swift 5 mode) — consistent with the rest of the
+  codebase and free of Sendable friction with the fakes. It still never blocks the UI: `handle`
+  `await`s every dependency (so it suspends, not stalls), and `ProcessCommandRunner` already
+  dispatches its blocking work off-main (S7). The serialized-update guarantee an `actor` would
+  give is deferred to S11, where the single polling loop is the only caller (no concurrent
+  `handle` calls in v1). This is the deliberate resolution of the concurrency-model question S6/S7
+  parked "for S8."
+- 2026-07-03 — S8: **The `Decision` → `AuditEvent` / reply mapping (deferred from S9) is defined
+  here.** One received update maps as: `rejectedUnknownUser` → **no reply** (FR-2: strangers get
+  silence) + `rejected("unknown user")`; `disarmed` → "🔒 disarmed…" reply + `rejected("disarmed")`;
+  `unknownCommand` → "❓ Unknown command." + `rejected("unknown command")`; `control(.armAccepted)`
+  → "🔓 Armed." + `control("armed")`; `control(.armRejected)` → "❌ Invalid code." +
+  **`rejected("bad code")`** (a failed arm changed no state, so it's a rejection, not a control
+  event); `control(.disarmAccepted)` → `control("disarmed")`; `control(.status(a))` →
+  `control("status armed=<bool>")`; `runAction` → run → `OutputFormatter.format` → send each →
+  `actionRan(command, exitCode)`. All reason strings are short and secret-free (I3).
+- 2026-07-03 — S8: **Transport sends are best-effort (`try?`), mirroring the audit sink.** A failed
+  `sendMessage`/`sendDocument` is swallowed so one bad send can't crash update handling / stop the
+  poll loop — same rationale as S9's non-throwing `AuditSink`. Non-actionable updates (no message /
+  no `from` / no `text`) are ignored silently with **no audit line** — they can't be authorized
+  (allowlist matches `from.id`) and aren't operator commands, so there's nothing to record.
+- 2026-07-03 — S8: **Fakes built here (first slice to drive these protocols), in
+  `RelayBackTests/Support/`:** `FakeTelegramTransport` (records `sentMessages`/`sentDocuments`/
+  `registeredCommands`, canned `updatesToReturn` for the S11 loop), `FakeCommandRunner` (records
+  `runActions`, returns a settable `result` — proves I2 via `runCount == 0`), `InMemoryAuditSink`
+  (records `entries`). `App/AppCoordinator.swift` and `RelayBackTests/App/` auto-included via the
+  file-system-synchronized group (objectVersion 77) — no pbxproj edit.
 - 2026-07-03 — S9: **`AuditSink.append` is non-throwing; the sink is best-effort.** PLAN says
   `AuditSink { append(AuditEntry) }`. Auditing is background bookkeeping and must never interrupt
   command handling, so `FileAuditLog` swallows its own write errors rather than propagating them
@@ -247,6 +279,22 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-03 — S8 complete. Added `App/AppCoordinator.swift` (MainActor `final class`: `handle(_
+  TelegramUpdate) async` → extract message/from/text → `AuthGuard.authorize` → reply + audit;
+  `.runAction` is the only path to `runner.run` → `OutputFormatter.format` → send). Built three
+  fakes in `RelayBackTests/Support/`: `FakeTelegramTransport`, `FakeCommandRunner`,
+  `InMemoryAuditSink`. Tests: `RelayBackTests/App/AppCoordinatorTests.swift` (9 — armed action
+  runs + formatted reply + `actionRan` audit w/ no output in the line (**I1/I2/I3**); unknown user
+  dropped, nothing run, no reply, `rejected("unknown user")` (**I2/FR-2**); disarmed action replies
+  + runner not called (**I2**); bad `/arm` code doesn't arm + audits `rejected("bad code")` then
+  `rejected("disarmed")`; `/arm` good code replies "Armed" + `control("armed")`, no run; oversized
+  output → one `output.txt` document + only the arm text (**FR-6**); `/status` reports + audits +
+  never runs; unknown command replied + audited; update w/o message/sender/text ignored — nothing
+  run/sent/audited). Ran RED (`cannot find type 'AppCoordinator'`) → GREEN → refactor on macOS:
+  **84 tests / 12 suites green** (was 75/11; +9). `App/` + `RelayBackTests/App/` auto-included
+  (objectVersion 77) — no pbxproj edit. **Next: S10 — Menu bar + Settings UI** (view-model logic
+  TDD'd; SwiftUI via Previews), then S11 lifecycle/polling loop wires the real transport to
+  `handle` with offset advance + backoff.
 - 2026-07-03 — S9 complete. Added `Storage/AuditEntry.swift` (`AuditEntry` + `AuditEvent`
   {`actionRan(command,exitCode)`, `control(String)`, `rejected(reason)`} + pure `line` formatting
   with free-text sanitization; `protocol AuditSink { append(AuditEntry) }`, non-throwing) and
