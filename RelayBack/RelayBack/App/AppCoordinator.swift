@@ -34,6 +34,10 @@ final class AppCoordinator {
     private let audit: AuditSink
     private let clock: Clock
 
+    /// Called after an action finishes, with its command token and result — the runtime wires this
+    /// to push the popover's "Last result" card (S13b). Optional so tests/headless runs need not set it.
+    var onActionCompleted: ((String, CommandResult) -> Void)?
+
     init(authGuard: AuthGuard,
          runner: CommandRunning,
          transport: TelegramTransport,
@@ -57,6 +61,12 @@ final class AppCoordinator {
     /// a removed id is revoked at once (I2). Arm state is preserved (see `AuthGuard.updateAllowlist`).
     func updateAllowlist(_ ids: Set<Int64>) {
         authGuard.updateAllowlist(ids)
+    }
+
+    /// Disarms the live session on demand (S13b — the popover's "Disarm now" button). A subsequent
+    /// action is blocked until the operator re-arms via TOTP (invariant I2).
+    func disarm() {
+        authGuard.disarm()
     }
 
     /// Routes one received update: authorize, act only if `.runAction`, reply, and audit the
@@ -117,6 +127,8 @@ final class AppCoordinator {
         }
         // I3: only the command token + exit code are recorded — never the captured output.
         record(fromId: fromId, event: .actionRan(command: action.command, exitCode: result.exitCode))
+        // S13b: feed the popover's last-result card (local UI only — not the audit log / Telegram).
+        onActionCompleted?(action.command, result)
     }
 
     // MARK: - Transport & audit helpers

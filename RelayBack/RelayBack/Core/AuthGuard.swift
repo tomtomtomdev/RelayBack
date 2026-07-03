@@ -67,6 +67,12 @@ struct AuthGuard {
         allowlist = ids
     }
 
+    /// Drops the session to disarmed immediately (S13b — the popover's "Disarm now" button). Same
+    /// effect as a `/disarm` message, without routing through `authorize`; identity is not involved.
+    mutating func disarm() {
+        armedUntil = nil
+    }
+
     /// True while the armed window is still open.
     var isArmed: Bool {
         guard let armedUntil else { return false }

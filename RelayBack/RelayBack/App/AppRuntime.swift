@@ -73,9 +73,19 @@ final class AppRuntime {
                                          audit: sink,
                                          clock: clock)
         self.coordinator = coordinator          // S12: target for hot-reloading the allowlist
-        sink.status = { [weak coordinator] in
+        let statusOf: (AppCoordinator?) -> MenuBarStatus = { coordinator in
             guard let coordinator else { return MenuBarStatus(isArmed: false, remaining: 0) }
             return MenuBarStatus(isArmed: coordinator.isArmed, remaining: coordinator.remainingArmedTime)
+        }
+        sink.status = { [weak coordinator] in statusOf(coordinator) }
+
+        // S13b: feed the armed popover's "Last result" card, and wire "Disarm now" to the live guard.
+        coordinator.onActionCompleted = { [weak self] command, result in
+            self?.menuBar.lastResult = LastResultPresentation(command: command, result: result)
+        }
+        menuBar.disarm = { [weak self, weak coordinator] in
+            coordinator?.disarm()
+            self?.menuBar.status = statusOf(coordinator)   // reflect the drop immediately
         }
 
         let loop = PollLoop(transport: client, handler: coordinator)

@@ -5,6 +5,26 @@
 
 ## Current state
 
+- **S13b done — armed popover content (actions + last result + disarm).** The armed popover now
+  matches the handoff: below the ARMED pill + countdown chip (S13a), an "Armed by operator…"
+  subtitle, an **ALLOWLISTED ACTIONS** list of read-only cards (command in accent blue + registry
+  description), a dark **LAST RESULT** terminal card (`$ /cmd`, colored `exit N`, output lines),
+  and an armed footer with a red **"Disarm now"** button + Settings/Quit. New pure types (TDD'd):
+  `Features/MenuBar/ActionSummary(Action)` (command + description **only** — no executable/args/
+  timeout, so nothing runnable reaches the UI: **I1** at the UI edge) and
+  `Features/MenuBar/LastResultPresentation(command:result:)` (→ `commandLine`/`exitLabel`/
+  `exitIsSuccess`/`outputLines`, stdout-else-stderr, trailing-blank-line trimmed).
+  `MenuBarModel` gained `actions` (defaults to `ActionRegistry.seed`), `lastResult`, and a `disarm`
+  closure hook. `AuthGuard.disarm()` + `AppCoordinator.disarm()` (I2: re-arm required after) and
+  `AppCoordinator.onActionCompleted` (fires after each run with command+result). `AppRuntime`
+  wires `onActionCompleted → menuBar.lastResult` and `menuBar.disarm → coordinator.disarm() +
+  status refresh`. **No core/security change** to the run path — the last-result card is local UI
+  (not audit/Telegram), so **I3** is untouched; execution stays Telegram-only (no click-to-run).
+  RECENT color-coding is still **S13c**.
+- ✅ **S13b verified green on macOS** (this session): full `RelayBackTests` suite = **150 tests /
+  22 suites** passing (added `LastResultPresentationTests` (4) + `MenuBarModelTests` (3) +2
+  `AppCoordinatorTests` (disarm drops the live session — I2; `onActionCompleted` gets command+result)).
+  App builds clean; armed/disarmed Previews render the new content.
 - **S13a done — design conformance begun (app icon + disarmed popover shell).** The finalized
   handoff icon set is integrated (`Assets.xcassets/AppIcon.appiconset` — 10 macOS PNGs +
   `Contents.json` with `-2x` filenames, copied verbatim; `icon.svg` intentionally not added, it's
@@ -77,10 +97,12 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S13b** — armed popover content (allowlisted-action cards from `ActionRegistry`,
-  last-result terminal card via a pure `LastResultPresentation(CommandResult)`, and a "Disarm now"
-  hook wired to `AuthGuard.disarm`); plumb `lastResult` + the disarm closure from
-  `AppCoordinator`/`AppRuntime` into the live `MenuBarModel`. v1 *logic* DoD is
+- **Next slice:** **S13c** — recent-activity color coding: replace the popover's plain
+  `recentAudit: [String]` with structured, color-coded rows via a pure `RecentActivityRow(from:
+  AuditEntry)` → (`time`, `command`, `statusText`, `severity: .normal|.warning|.danger`) — amber for
+  `rejected · disarmed`, red for `rejected · unknown id`, default for runs; assert no secret/full
+  output leaks into a row (I3). Update `MenuBarModel` to hold `[RecentActivityRow]` and refactor
+  `MenuBarAuditSink`'s push to build rows (keep its existing test green). v1 *logic* DoD is
   met, but the SwiftUI surfaces don't match the high-fidelity design handoff
   (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
   in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
@@ -113,7 +135,7 @@
 | S12 | Allowlist persistence & auth wiring *(new)* | ✅ done |
 | S13  | Design conformance — recreate handoff in SwiftUI *(new epic)* | ◐ in progress |
 | S13a | · App icon + popover shell (disarmed)            | ✅ done |
-| S13b | · Popover armed content (actions/result/disarm)  | ☐ not started |
+| S13b | · Popover armed content (actions/result/disarm)  | ✅ done |
 | S13c | · Recent-activity color coding                   | ☐ not started |
 | S13d | · Settings sidebar shell + Security pane         | ☐ not started |
 | S13e | · Allowlist pane + General pane                  | ☐ not started |
@@ -125,6 +147,22 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-03 — S13b: **The popover's "Last result" card shows command output — and that does not
+  touch I3.** I3 governs the audit log and Telegram replies (no output/secrets there); the
+  last-result terminal card is *local UI* the design handoff explicitly specifies, fed by a
+  dedicated `AppCoordinator.onActionCompleted` closure, separate from the audit path (the
+  `AuditSink`/`AuditEntry` still carry only command + exit code). So output reaches the screen but
+  never the log or chat metadata. `LastResultPresentation` uses stdout when present, else stderr.
+- 2026-07-03 — S13b: **"Disarm now" gets a first-class `AuthGuard.disarm()` / `AppCoordinator.disarm()`
+  rather than synthesizing a `/disarm` message.** The UI has no operator id/text to route through
+  `authorize`, and disarming is identity-independent, so a direct mutating `disarm()` (sets
+  `armedUntil = nil`, same effect as a `/disarm`) is the honest seam. I2 still holds — after a UI
+  disarm the next action is blocked until re-armed via TOTP (tested in `AppCoordinatorTests`).
+- 2026-07-03 — S13b: **`ActionSummary` is the I1 guard at the UI edge.** The popover binds to
+  `[ActionSummary]` (command + description only) built from `ActionRegistry.seed`; it structurally
+  omits `executable`/`arguments`/`timeout`, so no runnable payload can reach the view (execution
+  stays Telegram-only — the cards are read-only, per the S13 scope guard). `MenuBarModel.actions`
+  defaults to the seed registry; the armed body renders it, the disarmed body does not.
 - 2026-07-03 — S12: **Runtime allowlist changes hot-reload into the live guard; arm state is
   preserved.** This resolves the S11 design question. `AuthGuard.updateAllowlist(_:)` replaces the
   allowlist without touching `armedUntil` — identity and session are orthogonal, so (a) removing a
@@ -459,6 +497,21 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 ## Log
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
+
+- 2026-07-03 — S13b complete. Armed popover content. Pure/TDD: `Features/MenuBar/ActionSummary.swift`
+  (command + description only — I1 at the UI edge) + `Features/MenuBar/LastResultPresentation.swift`
+  (`command:result:` → commandLine/exitLabel/exitIsSuccess/outputLines). `MenuBarModel`: +`actions`
+  (defaults to seed), +`lastResult`, +`disarm` closure. `AuthGuard.disarm()`; `AppCoordinator.disarm()`
+  + `onActionCompleted`. `AppRuntime` wires last-result push + disarm→coordinator+status refresh.
+  `MenuBarRootView`: split into disarmed/armed bodies; armed = subtitle + ALLOWLISTED ACTIONS cards
+  + dark LAST RESULT terminal card + red "Disarm now" footer; armed Preview seeds a `lastResult`.
+  Tests: `LastResultPresentationTests` (4: exit0/nonzero/trailing-newline/empty), `MenuBarModelTests`
+  (3: actions mirror registry, lastResult nil default, disarm invokable), +2 `AppCoordinatorTests`
+  (disarm drops live session — I2; onActionCompleted gets command+result). Ran RED (`cannot find
+  'LastResultPresentation'`) → GREEN → refactor (moved header divider into the disarmed body only, to
+  match the handoff's armed layout) on macOS: **150 tests / 22 suites green** (was 141/20; +9, +2
+  suites). App builds clean. New files auto-included (objectVersion 77) — no pbxproj edit. **Next:
+  S13c — recent-activity color coding.**
 
 - 2026-07-03 — Bugfix (post-S12): **Settings allowlist add failed silently.** `SettingsView`'s Add
   button discarded the `AddResult`, so `.invalid`/`.duplicate` input gave zero feedback (reads as

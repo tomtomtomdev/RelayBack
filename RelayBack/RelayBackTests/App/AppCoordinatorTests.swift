@@ -208,6 +208,32 @@ struct AppCoordinatorTests {
         #expect(h.runner.runCount == 0)     // I2: a removed id can no longer run, even mid-session
     }
 
+    // MARK: - Disarm hook & last-result push for the popover (S13b)
+
+    @Test func disarmDropsTheLiveSessionSoNothingRuns() async {
+        let h = makeHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        #expect(h.coordinator.isArmed)
+
+        h.coordinator.disarm()                          // the popover's "Disarm now" target
+        #expect(h.coordinator.isArmed == false)
+
+        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        #expect(h.runner.runCount == 0)                 // I2: disarmed by the UI → nothing runs
+    }
+
+    @Test func onActionCompletedReceivesCommandAndResult() async {
+        let h = makeHarness()                           // default result: exit 0, "up 3 days"
+        var received: (command: String, result: CommandResult)?
+        h.coordinator.onActionCompleted = { received = ($0, $1) }
+
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+
+        #expect(received?.command == "/uptime")
+        #expect(received?.result == CommandResult(exitCode: 0, stdout: "up 3 days", stderr: ""))
+    }
+
     // MARK: - Non-actionable updates are ignored
 
     @Test func updateWithoutMessageOrSenderOrTextIsIgnored() async {
