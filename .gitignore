@@ -8,6 +8,7 @@ xcuserdata/
 # Build output
 DerivedData/
 build/
+dist/
 
 # Extracted design bundle — source of truth is RelayBack.zip
 RelayBack_zip_contents/
