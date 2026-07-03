@@ -9,9 +9,11 @@
 import Foundation
 
 enum Base32 {
+    /// The RFC 4648 base32 alphabet, indexed by 5-bit value (used for encoding).
+    private static let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
     /// Maps each base32 character (both cases) to its 5-bit value. Built once.
     private static let values: [Character: UInt8] = {
-        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
         var table = [Character: UInt8]()
         for (value, upper) in alphabet.enumerated() {
             table[upper] = UInt8(value)
@@ -19,6 +21,29 @@ enum Base32 {
         }
         return table
     }()
+
+    /// Encodes bytes to an uppercase, **unpadded** RFC 4648 base32 string. Unpadded because that
+    /// is the form `otpauth://` provisioning URIs and authenticator apps expect (the S10 QR);
+    /// `decode` ignores padding anyway, so `decode(encode(x)) == x` holds.
+    static func encode(_ data: Data) -> String {
+        var output = ""
+        var buffer: UInt = 0
+        var bitsInBuffer = 0
+
+        for byte in data {
+            buffer = (buffer << 8) | UInt(byte)
+            bitsInBuffer += 8
+            while bitsInBuffer >= 5 {
+                bitsInBuffer -= 5
+                output.append(alphabet[Int((buffer >> UInt(bitsInBuffer)) & 0x1f)])
+            }
+        }
+        // Flush the remaining <5 bits, left-padded with zeros to a full 5-bit group.
+        if bitsInBuffer > 0 {
+            output.append(alphabet[Int((buffer << UInt(5 - bitsInBuffer)) & 0x1f)])
+        }
+        return output
+    }
 
     /// Decodes a base32 string to bytes. Case-insensitive; ignores whitespace and `=` padding.
     /// Returns `nil` if the string contains any character outside the base32 alphabet.
