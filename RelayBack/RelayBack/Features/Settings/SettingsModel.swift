@@ -8,8 +8,9 @@
 //  without touching the real Keychain (invariant I3 — secrets never leave that seam).
 //
 //  The allowlist is edited as a pure `AllowlistDraft`; wiring the saved allowlist into the running
-//  coordinator (and persisting it) is the S11 lifecycle slice. The login-item toggle here is UI
-//  only — `SMAppService` is likewise wired in S11.
+//  coordinator (and persisting it) is deferred (needs a non-secret config store — see PROGRESS).
+//  The launch-at-login toggle goes through the injected `LoginItemControlling` seam (real
+//  `SMAppService` in the app, a fake in tests), so its glue is unit-tested (S11).
 //
 
 import Foundation
@@ -21,8 +22,9 @@ final class SettingsModel {
     var botToken: String
     /// Text field for the next allowlist id to add.
     var newIdText: String = ""
-    /// UI state of the launch-at-login toggle. Wired to `SMAppService` in S11.
-    var launchAtLogin: Bool = false
+    /// Whether the app launches at login. Mirrors the real login-item state; changed only via
+    /// `setLaunchAtLogin` so it never drifts from what `SMAppService` actually did.
+    private(set) var launchAtLogin: Bool
 
     /// The numeric Telegram id allowlist being edited (validated, unique, sorted).
     private(set) var allowlist: AllowlistDraft
@@ -35,17 +37,36 @@ final class SettingsModel {
     let account: String
 
     private let store: SecretStore
+    private let loginItem: LoginItemControlling
 
     init(store: SecretStore,
+         loginItem: LoginItemControlling = SMAppServiceLoginItem(),
          issuer: String = "RelayBack",
          account: String = "mac",
          allowlist: [Int64] = []) {
         self.store = store
+        self.loginItem = loginItem
         self.issuer = issuer
         self.account = account
         self.allowlist = AllowlistDraft(allowlist)
         self.botToken = (try? store.botToken()) ?? ""
         self.totpSecret = (try? store.totpSecret()) ?? nil
+        self.launchAtLogin = loginItem.isEnabled
+    }
+
+    // MARK: - Launch at login
+
+    /// Registers/unregisters the app as a login item, updating `launchAtLogin` to what actually
+    /// took effect. On failure it surfaces a short message and leaves the flag reflecting reality.
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try loginItem.setEnabled(enabled)
+            launchAtLogin = loginItem.isEnabled
+            lastError = nil
+        } catch {
+            launchAtLogin = loginItem.isEnabled
+            lastError = "Could not update launch-at-login."
+        }
     }
 
     // MARK: - Bot token

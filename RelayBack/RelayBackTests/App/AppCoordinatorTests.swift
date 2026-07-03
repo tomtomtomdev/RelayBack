@@ -167,6 +167,19 @@ struct AppCoordinatorTests {
         #expect(h.audit.entries.map(\.event) == [.rejected(reason: "unknown command")])
     }
 
+    // MARK: - Arm state exposed for the menu bar (S11)
+
+    @Test func exposesLiveArmStateForTheMenuBar() async {
+        let h = makeHarness()
+        #expect(h.coordinator.isArmed == false)
+        #expect(h.coordinator.remainingArmedTime == 0)
+
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+
+        #expect(h.coordinator.isArmed)
+        #expect(h.coordinator.remainingArmedTime == idleTimeout)
+    }
+
     // MARK: - Non-actionable updates are ignored
 
     @Test func updateWithoutMessageOrSenderOrTextIsIgnored() async {

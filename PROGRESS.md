@@ -5,7 +5,30 @@
 
 ## Current state
 
-- **Phase:** implementation. **S10 done** — Menu bar + Settings UI (FR-9). The TDD'd surface is the
+- **Phase:** implementation. **S11 done — all planned slices (S0–S11) complete.** Lifecycle & login
+  item. TDD'd core: `Core/Backoff` (pure exponential backoff, base×2ⁿ capped) and `App/PollLoop`
+  (the long-poll loop — offset advance/never-reprocess (FR-1), reconnect/backoff across transport
+  failures, idempotent start/stop, cancellation-clean shutdown). `PollLoop` dispatches through a new
+  `UpdateHandling` protocol (`AppCoordinator` conforms) so the loop is driven by a spy in tests
+  against `FakeTelegramTransport` (now scripts per-call successes/failures + records requested
+  offsets). Login item: `App/LoginItem` (`LoginItemControlling` protocol + real `SMAppServiceLoginItem`);
+  `SettingsModel.launchAtLogin` now goes through that seam (TDD'd against a fake — enable/reflect/
+  failure-keeps-state-honest). `AppCoordinator` gained read-only `isArmed`/`remainingArmedTime` for
+  the menu bar. `App/MenuBarAuditSink` decorates the file `AuditSink` to push each audit line + arm
+  status into the live `MenuBarModel` (TDD'd). Composition root `App/AppRuntime` (main-like, not
+  unit-tested) assembles the real Keychain/URLSession/Process/file impls and starts polling;
+  `RelayBackApp` uses an `NSApplicationDelegate` to `start()` at launch / `stop()` on terminate.
+- **⚠️ Known functional gap (deferred, not a bug):** the authorization **allowlist is not persisted**,
+  so a launched agent builds an EMPTY allowlist and authorizes **no one** (fails closed — safe, but
+  means the end-to-end `/arm`→run path can't work at runtime yet). Needs a non-secret config store
+  (no protocol exists yet) + feeding/hot-reloading it into the running `AuthGuard`. This is the one
+  remaining piece before v1 is operationally complete — see the S11 decision note. Also deferred: a
+  per-second live countdown in the menu bar (status refreshes on each audit event, not on a timer).
+- ✅ **S0–S11 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
+  **124 tests / 19 suites** passing (S11 added `BackoffTests`, `PollLoopTests`, `MenuBarAuditSinkTests`
+  + a coordinator arm-state test + 3 login-item tests). The `.app` builds, launches as a menu-bar
+  agent (no Dock icon), stays idle when unconfigured, and quits cleanly (launch smoke this session).
+- ~~**S10 done**~~ — Menu bar + Settings UI (FR-9). The TDD'd surface is the
   pure view-model logic; SwiftUI rendering is thin and Preview-verified. Landed: `Base32.encode`
   (RFC 4648, unpadded — for the QR), `Core/OtpAuthURI` (pure `otpauth://totp/...` builder pinned to
   the app's fixed TOTP config), `Features/Settings/AllowlistDraft` (id-input validation: positive
@@ -17,10 +40,9 @@
   CoreImage, generate/regenerate secret, launch-at-login toggle *UI only*), and added the `Settings`
   scene in `RelayBackApp`. **I3** upheld: secrets flow only through the `SecretStore` seam; the token
   field is a SecureField (never shown back) — proven in `SettingsModelTests`.
-- **Deferred to S11 (intentionally, not gaps):** live binding of `MenuBarModel`/arm state to the
-  poll loop; **allowlist persistence + feeding it into the coordinator's `AuthGuard`** (edited in
-  `AllowlistDraft` here but not yet stored/consumed — no protocol exists for non-secret config yet);
-  the launch-at-login toggle's real `SMAppService` wiring; recent-audit lines fed from the audit log.
+- **S10's "deferred to S11" items — status after S11:** ✅ live `MenuBarModel` arm-state + recent-audit
+  wiring (via `MenuBarAuditSink`); ✅ launch-at-login `SMAppService` wiring; ⏳ **allowlist persistence
+  + feeding into the running `AuthGuard`** still deferred (see the gap note above — needs a config store).
 - ~~**S8 done**~~ — `AppCoordinator` wires the whole run path:
   transport update → `AuthGuard` (identity + arm gate, which does the `ActionRegistry` match) →
   `CommandRunning` (only on `.runAction`) → `OutputFormatter` → transport reply → `AuditSink`
@@ -31,12 +53,13 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S11 — Lifecycle & login item** — start/stop the long-poll loop with run state
-  (wires the real `TelegramClient` → `AppCoordinator.handle` with offset advance + backoff against
-  the transport fake); `SMAppService` launch-at-login toggle wired to `SettingsModel.launchAtLogin`;
-  push live arm state + recent-audit lines into `MenuBarModel`; persist the allowlist and feed it
-  into the coordinator's `AuthGuard`; graceful shutdown across sleep/wake + network blip. See `PLAN.md`.
-- **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
+- **Next slice:** **S12 (new) — Allowlist persistence & runtime auth wiring** (the one remaining gap
+  before v1 is operational): add a non-secret config store (protocol + real UserDefaults/file impl +
+  fake), have `SettingsModel` persist the allowlist, and feed it into the running `AuthGuard`
+  (decide hot-reload vs. restart-to-apply, and whether changing the allowlist resets arm state).
+  Not in the original PLAN S0–S11 — append it to `PLAN.md` before starting.
+- **Blockers / open questions:** none blocking. Design Q for S12: hot-reload the allowlist into the
+  live guard, or apply on next launch? (Future-phase items parked in SPEC §10.)
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
   **109 tests / 16 suites** passing (S10 added Base32-encode tests + 4 suites: `OtpAuthURITests`,
   `AllowlistDraftTests`, `MenuBarStatusTests`, `SettingsModelTests`). SwiftUI views compile and are
@@ -57,7 +80,8 @@
 | S8  | AppCoordinator               | ✅ done |
 | S9  | Audit log                    | ✅ done |
 | S10 | Menu bar + Settings UI       | ✅ done |
-| S11 | Lifecycle & login item       | ☐ not started |
+| S11 | Lifecycle & login item       | ✅ done |
+| S12 | Allowlist persistence & auth wiring *(new)* | ☐ not started |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
@@ -65,6 +89,56 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-03 — S11: **The infinite poll loop is made testable by extracting one iteration.**
+  `PollLoop.pollOnce()` (fetch at offset → dispatch each → advance offset) is deterministic against
+  the fake, so FR-1 (never reprocess; empty batch never rewinds) is unit-tested directly. `run()` is
+  the thin `while !cancelled { pollOnce; on error backoff-sleep }` wrapper; its reconnect/backoff is
+  tested by scripting the fake transport (throw, throw, succeed, then block-until-cancel) with an
+  **injected `sleep`** that records delays without waiting — no real time passes. The fake signals
+  (`onScriptExhausted`) when it runs past the script so the test knows the loop recovered, then calls
+  `stop()`; the blocking `getUpdates` (real `Task.sleep`) throws `CancellationError`, which `run()`
+  catches to end cleanly. This is the deterministic realization of PLAN S11's "inject failing-then-
+  succeeding transport."
+- 2026-07-03 — S11: **`PollLoop` depends on `UpdateHandling`, not concrete `AppCoordinator`.** New
+  one-method protocol (`handle(_:) async`); `AppCoordinator` conforms via an empty extension. Lets a
+  `SpyUpdateHandler` assert exactly which updates were dispatched (proving no double-processing)
+  without a real coordinator. `FakeTelegramTransport` gained a scripted mode (`getUpdatesScript:
+  [GetUpdatesResult]` + `onScriptExhausted`) and now records `getUpdatesOffsets` — the old
+  `updatesToReturn` was removed (no test used it; S8 tests call `handle` directly, not `getUpdates`).
+- 2026-07-03 — S11: **Backoff is exponential+capped, failure count owned by the caller.** `Backoff`
+  (base 1s, cap 30s, ×2) is a pure `delay(afterFailures:)`; `run()` holds the counter (reset on a
+  successful poll, incremented per failure). Kept pure so the schedule is unit-tested in isolation.
+- 2026-07-03 — S11: **Launch-at-login goes through a `LoginItemControlling` seam.** Protocol + real
+  `SMAppServiceLoginItem` (`SMAppService.mainApp` register/unregister); `SettingsModel.launchAtLogin`
+  became `private(set)`, changed only via `setLaunchAtLogin(_:)` which calls the seam and sets the
+  flag to what **actually** took effect (`loginItem.isEnabled`) — on failure it surfaces a message
+  and leaves the flag reflecting reality (no optimistic drift). Toggle in `SettingsView` now uses a
+  custom `Binding` calling that method. Real `SMAppService` impl verified by compile + running app;
+  the glue is TDD'd against `FakeLoginItem`. The `SMAppServiceLoginItem()` default arg means the
+  existing token/secret tests read real login-item *status* (read-only, harmless) unless they inject
+  the fake — the login-item tests inject `FakeLoginItem`.
+- 2026-07-03 — S11: **`MenuBarAuditSink` decorates the audit sink to make the popover live.** Every
+  outcome already funnels through the `AuditSink` (S8), so wrapping it is the least-invasive way to
+  feed `MenuBarModel` (append the pure, secret-free `AuditEntry.line`; refresh arm status via a
+  `status` closure that reads the coordinator weakly — set after the coordinator is built to break
+  the sink↔coordinator cycle). Arm status therefore refreshes on each audit event, **not** on a
+  per-second timer (live countdown deferred). `AppCoordinator` exposes read-only `isArmed`/
+  `remainingArmedTime` for this (tested).
+- 2026-07-03 — S11: **`AppRuntime` is the composition root; lifecycle tied to the app delegate.**
+  Like `main()` — it's the one place concrete impls (`KeychainStore`, `TelegramClient`,
+  `ProcessCommandRunner`, `FileAuditLog`) are assembled, so it's verified by build + launch, not unit
+  tests. `start()` builds the coordinator + `PollLoop` from stored credentials and begins polling
+  (idempotent; **stays idle if unconfigured** — no token/secret → early return, so a fresh install
+  doesn't crash); `stop()` halts for graceful shutdown. `RelayBackApp` moved from `.task`-on-popover
+  (only fired when the menu was opened — wrong for an unattended agent) to an
+  `@NSApplicationDelegateAdaptor` that starts at `applicationDidFinishLaunching` and stops at
+  `applicationWillTerminate`. Audit log lives at `~/Library/Application Support/RelayBack/audit.log`.
+- 2026-07-03 — S11: **Allowlist persistence deliberately NOT done here → carved out as S12.** PLAN
+  S11's Goal (poll lifecycle / SMAppService / graceful shutdown / backoff) is delivered and green;
+  the "persist allowlist + feed the running guard" line that PROGRESS had informally folded into S11
+  is a distinct concern (needs a new non-secret config-store protocol and a hot-reload-vs-restart
+  decision) and would have overloaded the slice. Consequence: the shipped agent authorizes no one
+  until S12. Fails closed (safe). Appended S12 to the slice table; add it to `PLAN.md` before starting.
 - 2026-07-03 — S10: **The slice split its testable core from thin, Preview-only SwiftUI.** Per PLAN
   S10 ("Tests first: view-model logic only… SwiftUI rendering verified manually via Previews") the
   four pure surfaces are TDD'd directly — `Base32.encode`, `Core/OtpAuthURI`, `AllowlistDraft`,
@@ -329,6 +403,22 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-03 — S11 complete. Lifecycle & login item. Pure/TDD: `Core/Backoff.swift` (exponential,
+  capped) + `BackoffTests`. `App/PollLoop.swift` (long-poll loop: `pollOnce` offset-advance/no-
+  reprocess, `run` backoff+reconnect, idempotent `start`/`stop`, cancellation-clean) + `UpdateHandling`
+  protocol (`AppCoordinator` conforms) + `PollLoopTests` (driven via `SpyUpdateHandler` +
+  scripted/blocking `FakeTelegramTransport` + `SleepRecorder`/`AsyncSignal`, no real time). Login:
+  `App/LoginItem.swift` (`LoginItemControlling` + real `SMAppServiceLoginItem`); `SettingsModel`
+  `launchAtLogin`→ seam via `setLaunchAtLogin`; `FakeLoginItem` + 3 tests. `AppCoordinator` +
+  `isArmed`/`remainingArmedTime` (+test). `App/MenuBarAuditSink.swift` (feeds live `MenuBarModel`) +
+  `MenuBarAuditSinkTests`. Composition: `App/AppRuntime.swift` (builds real deps, starts polling,
+  idle-if-unconfigured) + `RelayBackApp` `NSApplicationDelegate` start/stop. Ran RED (types missing:
+  `UpdateHandling`/`Backoff`/`PollLoop`) → GREEN → refactor on macOS: **124 tests / 19 suites green**
+  (was 109/16; +15, +3 suites). One compile fix: `try?` flattens `String?`/`Data?`, so the config
+  guard needed single (not double) optional binding. App launches as a menu-bar agent, idle when
+  unconfigured, quits cleanly (launch smoke). New files auto-included (objectVersion 77) — no pbxproj
+  edit. **Next: S12 (new) — allowlist persistence + feed the running `AuthGuard`** (the last gap
+  before v1 is operational; append to `PLAN.md` first). All original PLAN slices S0–S11 are ✅.
 - 2026-07-03 — S10 complete. Menu bar + Settings UI (FR-9). Pure/TDD: added `Base32.encode`
   (unpadded RFC 4648) + tests; `Core/OtpAuthURI.swift` (pure `otpauth://` builder) +
   `OtpAuthURITests`; `Features/Settings/AllowlistDraft.swift` (positive-Int64 id validation, dedup,

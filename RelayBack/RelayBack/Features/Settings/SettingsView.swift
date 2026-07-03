@@ -101,7 +101,10 @@ struct SettingsView: View {
 
     private var startupSection: some View {
         Section("Startup") {
-            Toggle("Launch at login", isOn: $model.launchAtLogin)
+            Toggle("Launch at login", isOn: Binding(
+                get: { model.launchAtLogin },
+                set: { model.setLaunchAtLogin($0) }
+            ))
         }
     }
 

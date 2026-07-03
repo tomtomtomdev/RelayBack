@@ -136,6 +136,21 @@ includes: tests green, refactor pass done, `PROGRESS.md` updated.
 - **Done when:** lifecycle tests green; app runs unattended across a sleep/wake + network
   blip without crashing or double-processing updates.
 
+### S12 — Allowlist persistence & runtime auth wiring *(added after S11)*
+- **Why added:** S11 delivered the poll lifecycle, but the authorization allowlist edited in
+  Settings (S10) is never persisted or fed into the running `AuthGuard`, so the shipped agent
+  authorizes no one (fails closed). This slice closes the last gap before the v1 DoD below is
+  actually reachable.
+- **Goal:** a non-secret config store — `protocol ConfigStore { allowlist get/set }`, in-memory
+  fake, real `UserDefaults` (or JSON file) impl. `SettingsModel` persists the allowlist through it;
+  `AppRuntime` reads it to build the `AuthGuard`. Decide + implement how a runtime allowlist change
+  reaches the live guard (hot-reload vs. apply-on-next-launch) and whether it resets arm state.
+- **Tests first:** against the fake — allowlist round-trips; a persisted allowlist is what the
+  coordinator's guard authorizes against (an id added in Settings can run once armed; a removed id
+  cannot). Real impl compiles / smoke only.
+- **Done when:** persistence + wiring tests green; an operator whose id is in the saved allowlist
+  can `/arm` and run an action end-to-end.
+
 ---
 
 ## Definition of done (whole project, v1)

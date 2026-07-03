@@ -5,30 +5,41 @@
 //  Menu-bar agent entry point. No Dock icon (LSUIElement); the app lives entirely in the menu bar
 //  via MenuBarExtra, with a standard Settings scene. See SPEC §7.
 //
-//  S10 wires the view state: a real `KeychainStore` backs `SettingsModel` (token + TOTP secret),
-//  and `MenuBarModel` holds the popover's arm status + recent audit. The S11 lifecycle slice will
-//  connect the poll loop / `AppCoordinator` so these update live.
+//  S11 wires the lifecycle. `AppRuntime` is the composition root — it owns the view models and the
+//  polling loop. An `NSApplicationDelegate` starts long-polling at launch (so the agent runs
+//  unattended, not only when the popover is opened) and stops it on termination for a graceful
+//  shutdown. The loop survives network blips and sleep/wake via `PollLoop`'s backoff.
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct RelayBackApp: App {
-    @State private var settings: SettingsModel
-    @State private var menuBar = MenuBarModel()
-
-    init() {
-        _settings = State(initialValue: SettingsModel(store: KeychainStore()))
-    }
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         MenuBarExtra("RelayBack", systemImage: "dot.radiowaves.left.and.right") {
-            MenuBarRootView(model: menuBar)
+            MenuBarRootView(model: delegate.runtime.menuBar)
         }
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(model: settings)
+            SettingsView(model: delegate.runtime.settings)
         }
+    }
+}
+
+/// Owns the runtime and ties its polling lifecycle to the app's: begin at launch, end on quit.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let runtime = AppRuntime()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        runtime.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        runtime.stop()
     }
 }

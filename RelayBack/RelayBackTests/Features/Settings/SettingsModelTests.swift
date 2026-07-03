@@ -14,6 +14,34 @@ import Testing
 
 struct SettingsModelTests {
 
+    private enum FakeError: Error { case boom }
+
+    // MARK: - Launch at login (SMAppService glue, driven against the fake)
+
+    @Test func launchAtLoginReflectsTheLoginItemOnLoad() {
+        let model = SettingsModel(store: InMemorySecretStore(), loginItem: FakeLoginItem(isEnabled: true))
+        #expect(model.launchAtLogin)
+    }
+
+    @Test func setLaunchAtLoginEnablesTheLoginItem() {
+        let login = FakeLoginItem(isEnabled: false)
+        let model = SettingsModel(store: InMemorySecretStore(), loginItem: login)
+        model.setLaunchAtLogin(true)
+        #expect(login.isEnabled)
+        #expect(model.launchAtLogin)
+        #expect(model.lastError == nil)
+    }
+
+    @Test func setLaunchAtLoginFailureSurfacesErrorAndKeepsStateHonest() {
+        let login = FakeLoginItem(isEnabled: false)
+        login.errorToThrow = FakeError.boom
+        let model = SettingsModel(store: InMemorySecretStore(), loginItem: login)
+        model.setLaunchAtLogin(true)
+        #expect(login.isEnabled == false)
+        #expect(model.launchAtLogin == false)   // stays reflecting reality, not the failed request
+        #expect(model.lastError != nil)
+    }
+
     @Test func loadsExistingTokenFromTheStore() {
         let store = InMemorySecretStore(botToken: "abc:123")
         let model = SettingsModel(store: store)

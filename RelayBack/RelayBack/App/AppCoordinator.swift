@@ -46,6 +46,12 @@ final class AppCoordinator {
         self.clock = clock
     }
 
+    /// Whether the session is currently armed — read by the menu bar to show live arm state (S11).
+    var isArmed: Bool { authGuard.isArmed }
+
+    /// Seconds left in the armed window (0 when disarmed) — feeds the menu-bar countdown (S11).
+    var remainingArmedTime: TimeInterval { authGuard.remainingArmedTime }
+
     /// Routes one received update: authorize, act only if `.runAction`, reply, and audit the
     /// outcome. Non-actionable updates (no message / no sender / no text) are ignored silently —
     /// they can't be authorized (the allowlist matches on `from.id`) and warrant no audit line.
