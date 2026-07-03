@@ -180,6 +180,34 @@ struct AppCoordinatorTests {
         #expect(h.coordinator.remainingArmedTime == idleTimeout)
     }
 
+    // MARK: - Runtime allowlist wiring (S12): a newly-added id can arm and run
+
+    @Test func updateAllowlistLetsANewlyAddedIdArmAndRun() async {
+        let h = makeHarness()            // allowlist starts as [allowed]; `newcomer` is a stranger
+        let newcomer: Int64 = 222
+
+        // Before wiring: the newcomer is dropped and nothing runs (I2).
+        await h.coordinator.handle(update(fromId: newcomer, text: "/uptime"))
+        #expect(h.runner.runCount == 0)
+
+        h.coordinator.updateAllowlist([allowed, newcomer])
+        await h.coordinator.handle(update(fromId: newcomer, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: newcomer, text: "/uptime"))
+
+        // The newly-authorized id armed and ran exactly the registry action (I1/I2).
+        #expect(h.runner.runActions == [uptime])
+    }
+
+    @Test func updateAllowlistRevokesARemovedId() async {
+        let h = makeHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+
+        h.coordinator.updateAllowlist([])   // remove everyone
+        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+
+        #expect(h.runner.runCount == 0)     // I2: a removed id can no longer run, even mid-session
+    }
+
     // MARK: - Non-actionable updates are ignored
 
     @Test func updateWithoutMessageOrSenderOrTextIsIgnored() async {

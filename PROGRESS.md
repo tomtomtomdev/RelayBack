@@ -5,7 +5,23 @@
 
 ## Current state
 
-- **Phase:** implementation. **S11 done — all planned slices (S0–S11) complete.** Lifecycle & login
+- **Phase:** implementation. **S12 done — v1 is operationally complete (all slices S0–S12).** The
+  authorization allowlist is now persisted and fed into the running `AuthGuard`, closing the last
+  gap: an operator whose id is in the saved allowlist can `/arm` and run an allowlisted action
+  end-to-end. New `Storage/ConfigStore` seam (non-secret, non-throwing, fails-closed to empty) with
+  real `UserDefaultsConfigStore` + `InMemoryConfigStore` fake. `SettingsModel` loads/persists the
+  allowlist through it and fires `onAllowlistChanged` on every real change; `AppRuntime` seeds the
+  guard from the store on `start()` and wires that callback to `AppCoordinator.updateAllowlist`, so
+  an edit **hot-reloads** into the live guard immediately (no restart). `AuthGuard.updateAllowlist`
+  replaces the allowlist while **preserving arm state** (identity ≠ session): a removed id is revoked
+  at once (I2), a live operator's session is not dropped by an unrelated edit.
+- ✅ **S0–S12 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
+  **136 tests / 20 suites** passing (S12 added `ConfigStoreTests` (4) + `AuthGuard` update tests (2)
+  + `AppCoordinator` allowlist-wiring tests (2) + `SettingsModel` persistence tests (4)). App + tests
+  build clean, no warnings.
+- **Deferred (non-blocking):** per-second live menu-bar countdown (status refreshes on each audit
+  event, not on a timer). Future-phase items parked in SPEC §10.
+- ~~**S11 done**~~ — Lifecycle & login
   item. TDD'd core: `Core/Backoff` (pure exponential backoff, base×2ⁿ capped) and `App/PollLoop`
   (the long-poll loop — offset advance/never-reprocess (FR-1), reconnect/backoff across transport
   failures, idempotent start/stop, cancellation-clean shutdown). `PollLoop` dispatches through a new
@@ -18,16 +34,9 @@
   status into the live `MenuBarModel` (TDD'd). Composition root `App/AppRuntime` (main-like, not
   unit-tested) assembles the real Keychain/URLSession/Process/file impls and starts polling;
   `RelayBackApp` uses an `NSApplicationDelegate` to `start()` at launch / `stop()` on terminate.
-- **⚠️ Known functional gap (deferred, not a bug):** the authorization **allowlist is not persisted**,
-  so a launched agent builds an EMPTY allowlist and authorizes **no one** (fails closed — safe, but
-  means the end-to-end `/arm`→run path can't work at runtime yet). Needs a non-secret config store
-  (no protocol exists yet) + feeding/hot-reloading it into the running `AuthGuard`. This is the one
-  remaining piece before v1 is operationally complete — see the S11 decision note. Also deferred: a
-  per-second live countdown in the menu bar (status refreshes on each audit event, not on a timer).
-- ✅ **S0–S11 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
-  **124 tests / 19 suites** passing (S11 added `BackoffTests`, `PollLoopTests`, `MenuBarAuditSinkTests`
-  + a coordinator arm-state test + 3 login-item tests). The `.app` builds, launches as a menu-bar
-  agent (no Dock icon), stays idle when unconfigured, and quits cleanly (launch smoke this session).
+- ✅ **S11 (prior slice) verified green** — poll lifecycle, backoff/reconnect, `SMAppService` login
+  item, live menu-bar wiring; the `.app` launches as a menu-bar agent (no Dock icon), stays idle when
+  unconfigured, and quits cleanly.
 - ~~**S10 done**~~ — Menu bar + Settings UI (FR-9). The TDD'd surface is the
   pure view-model logic; SwiftUI rendering is thin and Preview-verified. Landed: `Base32.encode`
   (RFC 4648, unpadded — for the QR), `Core/OtpAuthURI` (pure `otpauth://totp/...` builder pinned to
@@ -53,13 +62,11 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S12 (new) — Allowlist persistence & runtime auth wiring** (the one remaining gap
-  before v1 is operational): add a non-secret config store (protocol + real UserDefaults/file impl +
-  fake), have `SettingsModel` persist the allowlist, and feed it into the running `AuthGuard`
-  (decide hot-reload vs. restart-to-apply, and whether changing the allowlist resets arm state).
-  Not in the original PLAN S0–S11 — append it to `PLAN.md` before starting.
-- **Blockers / open questions:** none blocking. Design Q for S12: hot-reload the allowlist into the
-  live guard, or apply on next launch? (Future-phase items parked in SPEC §10.)
+- **Next slice:** none required for v1 — the whole-project Definition of Done (PLAN) is met. Optional
+  follow-ups if desired: per-second live menu-bar countdown; a real-Keychain/UserDefaults end-to-end
+  launch smoke; the future-phase items in SPEC §10.
+- **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
+  preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
   **109 tests / 16 suites** passing (S10 added Base32-encode tests + 4 suites: `OtpAuthURITests`,
   `AllowlistDraftTests`, `MenuBarStatusTests`, `SettingsModelTests`). SwiftUI views compile and are
@@ -81,7 +88,7 @@
 | S9  | Audit log                    | ✅ done |
 | S10 | Menu bar + Settings UI       | ✅ done |
 | S11 | Lifecycle & login item       | ✅ done |
-| S12 | Allowlist persistence & auth wiring *(new)* | ☐ not started |
+| S12 | Allowlist persistence & auth wiring *(new)* | ✅ done |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
@@ -89,6 +96,27 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-03 — S12: **Runtime allowlist changes hot-reload into the live guard; arm state is
+  preserved.** This resolves the S11 design question. `AuthGuard.updateAllowlist(_:)` replaces the
+  allowlist without touching `armedUntil` — identity and session are orthogonal, so (a) removing a
+  (possibly compromised) id revokes it **immediately** rather than at next launch (a stronger I2
+  property than restart-to-apply), and (b) editing who may run must not drop a legitimate operator's
+  live armed session. `SettingsModel.onAllowlistChanged` is the seam: `AppRuntime` wires it to
+  `AppCoordinator.updateAllowlist` (weak coordinator; nil when unconfigured/stopped). The persisted
+  `ConfigStore` remains the source of truth `start()` seeds the guard from, so the two paths agree.
+- 2026-07-03 — S12: **`ConfigStore` is non-secret and non-throwing (contrast `SecretStore`).** It
+  backs onto `UserDefaults` (reads can't fail) and a config write is best-effort bookkeeping that
+  must never interrupt the operator, so — unlike the throwing `SecretStore` — its methods don't
+  throw. It **fails closed**: a missing/unreadable allowlist reads back as `[]`, so an absent config
+  can only narrow who may run (I2), never widen. Ids stored as `[Int]` (64-bit on macOS → `Int64`
+  round-trips). Real `UserDefaultsConfigStore` is contract-pinned by `ConfigStoreTests` against the
+  fake plus one isolated-suite smoke test (never `.standard`, so no test pollutes real defaults).
+- 2026-07-03 — S12: **`SettingsModel` no longer takes an `allowlist:` seed param — the `ConfigStore`
+  is the single source.** It loads the allowlist from the store on init and persists (+ notifies) on
+  every *real* change only (a duplicate/invalid add or a no-op remove neither re-persists nor
+  hot-reloads). Existing `SettingsModelTests` were updated to inject `InMemoryConfigStore` so none
+  touch `UserDefaults.standard`. SwiftUI previews got a local `PreviewConfigStore` (mirroring the
+  existing `PreviewSecretStore`); fixed a latent `secret = secret` self-assign bug in the latter.
 - 2026-07-03 — S11: **The infinite poll loop is made testable by extracting one iteration.**
   `PollLoop.pollOnce()` (fetch at offset → dispatch each → advance offset) is deterministic against
   the fake, so FR-1 (never reprocess; empty batch never rewinds) is unit-tested directly. `run()` is
@@ -403,6 +431,22 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-03 — S12 complete. Allowlist persistence & runtime auth wiring — the last gap; **v1 DoD
+  met**. New `Storage/ConfigStore.swift` (protocol, non-secret/non-throwing/fails-closed) +
+  `Storage/UserDefaultsConfigStore.swift` (real, `[Int]`-backed) + `Support/InMemoryConfigStore.swift`
+  (fake). `AuthGuard`: `allowlist` → `var` + `mutating updateAllowlist(_:)` (arm state preserved).
+  `AppCoordinator.updateAllowlist(_:)` forwards to the guard. `SettingsModel`: injects `ConfigStore`
+  (dropped the `allowlist:` seed param), loads on init, persists + fires `onAllowlistChanged` on real
+  changes only. `AppRuntime`: injects `configStore`, seeds the guard from it on `start()`, keeps a
+  `coordinator` ref, and wires `onAllowlistChanged` → `coordinator.updateAllowlist` for hot-reload.
+  Tests: `ConfigStoreTests` (4, incl. isolated-suite UserDefaults smoke), +2 `AuthGuardTests`
+  (recognize/revoke; arm-state-preserved), +2 `AppCoordinatorTests` (newly-added id arms+runs;
+  removed id revoked mid-session — I2), +4 `SettingsModelTests` (load/persist/notify; no-op doesn't
+  notify). Ran RED (`cannot find type 'ConfigStore'`) → GREEN → refactor on macOS: **136 tests / 20
+  suites green** (was 124/19; +12, +1 suite). App + tests build clean, no warnings. Fixed a latent
+  preview bug (`PreviewSecretStore` self-assigned `secret`). New files auto-included (objectVersion
+  77) — no pbxproj edit. **Next: none required for v1** (optional: live countdown, real-store E2E
+  smoke, SPEC §10 future phases).
 - 2026-07-03 — S11 complete. Lifecycle & login item. Pure/TDD: `Core/Backoff.swift` (exponential,
   capped) + `BackoffTests`. `App/PollLoop.swift` (long-poll loop: `pollOnce` offset-advance/no-
   reprocess, `run` backoff+reconnect, idempotent `start`/`stop`, cancellation-clean) + `UpdateHandling`

@@ -136,7 +136,7 @@ struct SettingsView: View {
 #Preview("Configured") {
     SettingsView(model: SettingsModel(
         store: PreviewSecretStore(totpSecret: Data("12345678901234567890".utf8)),
-        allowlist: [42, 1007]
+        configStore: PreviewConfigStore(allowlist: [42, 1007])
     ))
 }
 
@@ -149,4 +149,12 @@ private final class PreviewSecretStore: SecretStore {
     func setBotToken(_ token: String?) throws { self.token = token }
     func totpSecret() throws -> Data? { secret }
     func setTOTPSecret(_ secret: Data?) throws { self.secret = secret }
+}
+
+/// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist.
+private final class PreviewConfigStore: ConfigStore {
+    private var ids: [Int64]
+    init(allowlist: [Int64] = []) { ids = allowlist }
+    func allowlist() -> [Int64] { ids }
+    func setAllowlist(_ ids: [Int64]) { self.ids = ids }
 }

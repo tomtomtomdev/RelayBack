@@ -7,8 +7,10 @@
 //  in-memory fake in tests), so token save/load and TOTP-secret generation are unit-testable
 //  without touching the real Keychain (invariant I3 — secrets never leave that seam).
 //
-//  The allowlist is edited as a pure `AllowlistDraft`; wiring the saved allowlist into the running
-//  coordinator (and persisting it) is deferred (needs a non-secret config store — see PROGRESS).
+//  The allowlist is edited as a pure `AllowlistDraft`, loaded from and persisted through the
+//  injected `ConfigStore` seam (S12). Every change is also pushed to `onAllowlistChanged`, which
+//  `AppRuntime` uses to hot-reload the running `AuthGuard` so an edit takes effect immediately
+//  (a removed id is revoked at once — invariant I2) without restarting the agent.
 //  The launch-at-login toggle goes through the injected `LoginItemControlling` seam (real
 //  `SMAppService` in the app, a fake in tests), so its glue is unit-tested (S11).
 //
@@ -33,22 +35,28 @@ final class SettingsModel {
     /// A short, secret-free message surfaced to the UI after a failed Keychain operation.
     private(set) var lastError: String?
 
+    /// Called after every allowlist change with the new ids, so the composition root can hot-reload
+    /// the running `AuthGuard` (S12). Not set in tests that only assert persistence.
+    var onAllowlistChanged: (([Int64]) -> Void)?
+
     let issuer: String
     let account: String
 
     private let store: SecretStore
+    private let configStore: ConfigStore
     private let loginItem: LoginItemControlling
 
     init(store: SecretStore,
+         configStore: ConfigStore = UserDefaultsConfigStore(),
          loginItem: LoginItemControlling = SMAppServiceLoginItem(),
          issuer: String = "RelayBack",
-         account: String = "mac",
-         allowlist: [Int64] = []) {
+         account: String = "mac") {
         self.store = store
+        self.configStore = configStore
         self.loginItem = loginItem
         self.issuer = issuer
         self.account = account
-        self.allowlist = AllowlistDraft(allowlist)
+        self.allowlist = AllowlistDraft(configStore.allowlist())
         self.botToken = (try? store.botToken()) ?? ""
         self.totpSecret = (try? store.totpSecret()) ?? nil
         self.launchAtLogin = loginItem.isEnabled
@@ -85,16 +93,27 @@ final class SettingsModel {
     // MARK: - Allowlist
 
     /// Validates and adds `newIdText`; clears the field on success. Returns the outcome so the
-    /// view can surface "invalid" / "already added".
+    /// view can surface "invalid" / "already added". Persists and hot-reloads only on a real change.
     @discardableResult
     func addId() -> AllowlistDraft.AddResult {
         let result = allowlist.add(newIdText)
-        if case .added = result { newIdText = "" }
+        if case .added = result {
+            newIdText = ""
+            persistAllowlist()
+        }
         return result
     }
 
     func removeId(_ id: Int64) {
+        let before = allowlist.ids
         allowlist.remove(id)
+        if allowlist.ids != before { persistAllowlist() }
+    }
+
+    /// Writes the current allowlist to the config store and notifies the running guard (S12).
+    private func persistAllowlist() {
+        configStore.setAllowlist(allowlist.ids)
+        onAllowlistChanged?(allowlist.ids)
     }
 
     // MARK: - TOTP secret

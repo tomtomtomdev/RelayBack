@@ -37,7 +37,7 @@ enum ControlResult: Equatable {
 }
 
 struct AuthGuard {
-    private let allowlist: Set<Int64>
+    private var allowlist: Set<Int64>
     private let totpSecret: Data
     private let registry: ActionRegistry
     private let clock: Clock
@@ -57,6 +57,14 @@ struct AuthGuard {
         self.registry = registry
         self.clock = clock
         self.idleTimeout = idleTimeout
+    }
+
+    /// Replaces the authorization allowlist at runtime (S12 — hot-reload from Settings). Arm state
+    /// is intentionally preserved: identity and session are orthogonal, so editing who may run
+    /// commands must neither drop a legitimate operator's live session nor keep a removed id armed.
+    /// A removed id is revoked immediately — its next message fails the identity gate (invariant I2).
+    mutating func updateAllowlist(_ ids: Set<Int64>) {
+        allowlist = ids
     }
 
     /// True while the armed window is still open.

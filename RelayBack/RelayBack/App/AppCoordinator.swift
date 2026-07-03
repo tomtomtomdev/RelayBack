@@ -52,6 +52,13 @@ final class AppCoordinator {
     /// Seconds left in the armed window (0 when disarmed) — feeds the menu-bar countdown (S11).
     var remainingArmedTime: TimeInterval { authGuard.remainingArmedTime }
 
+    /// Applies a runtime allowlist change to the live guard (S12). Called when the operator edits
+    /// the allowlist in Settings, so identity changes take effect immediately without a restart —
+    /// a removed id is revoked at once (I2). Arm state is preserved (see `AuthGuard.updateAllowlist`).
+    func updateAllowlist(_ ids: Set<Int64>) {
+        authGuard.updateAllowlist(ids)
+    }
+
     /// Routes one received update: authorize, act only if `.runAction`, reply, and audit the
     /// outcome. Non-actionable updates (no message / no sender / no text) are ignored silently —
     /// they can't be authorized (the allowlist matches on `from.id`) and warrant no audit line.

@@ -12,10 +12,10 @@
 //  long-polling; with no token/secret configured yet it stays idle (nothing to poll). `stop()`
 //  halts polling for a clean shutdown.
 //
-//  NOTE (deferred): the authorization allowlist is not yet persisted, so a freshly launched agent
-//  builds an EMPTY allowlist and therefore authorizes no one (fails closed — safe). Persisting the
-//  allowlist and feeding it into the running `AuthGuard` needs a non-secret config store and is
-//  tracked in PROGRESS as the next step.
+//  The authorization allowlist is persisted through a `ConfigStore` (S12): `start()` seeds the
+//  `AuthGuard` from the saved allowlist, and edits made in Settings are both persisted and
+//  hot-reloaded into the running guard via `settings.onAllowlistChanged`, so an id added/removed
+//  in Settings takes effect immediately without a restart (a removed id is revoked at once — I2).
 //
 
 import Foundation
@@ -27,14 +27,25 @@ final class AppRuntime {
     let menuBar = MenuBarModel()
 
     private let store: SecretStore
+    private let configStore: ConfigStore
     private let idleTimeout: TimeInterval
 
     private var pollLoop: PollLoop?
+    private var coordinator: AppCoordinator?
 
-    init(store: SecretStore = KeychainStore(), idleTimeout: TimeInterval = 300) {
+    init(store: SecretStore = KeychainStore(),
+         configStore: ConfigStore = UserDefaultsConfigStore(),
+         idleTimeout: TimeInterval = 300) {
         self.store = store
+        self.configStore = configStore
         self.idleTimeout = idleTimeout
-        self.settings = SettingsModel(store: store)
+        self.settings = SettingsModel(store: store, configStore: configStore)
+
+        // S12: an allowlist edit in Settings both persists (via the config store) and hot-reloads
+        // into the running guard, so it takes effect immediately without restarting the agent.
+        settings.onAllowlistChanged = { [weak self] ids in
+            self?.coordinator?.updateAllowlist(Set(ids))
+        }
     }
 
     /// Begins long-polling if the app is configured (bot token + TOTP secret present). Idempotent —
@@ -48,7 +59,8 @@ final class AppRuntime {
         }
 
         let clock = SystemClock()
-        let authGuard = AuthGuard(allowlist: Set(settings.allowlist.ids),
+        // Seed the guard from the persisted allowlist (S12) — the source of truth across launches.
+        let authGuard = AuthGuard(allowlist: Set(configStore.allowlist()),
                                   totpSecret: secret,
                                   registry: .seed,
                                   clock: clock,
@@ -60,6 +72,7 @@ final class AppRuntime {
                                          transport: client,
                                          audit: sink,
                                          clock: clock)
+        self.coordinator = coordinator          // S12: target for hot-reloading the allowlist
         sink.status = { [weak coordinator] in
             guard let coordinator else { return MenuBarStatus(isArmed: false, remaining: 0) }
             return MenuBarStatus(isArmed: coordinator.isArmed, remaining: coordinator.remainingArmedTime)
@@ -77,6 +90,7 @@ final class AppRuntime {
     func stop() {
         pollLoop?.stop()
         pollLoop = nil
+        coordinator = nil
     }
 
     /// Whether the agent is currently long-polling.

@@ -146,6 +146,36 @@ struct AuthGuardTests {
         #expect(guardState.authorize(fromId: allowed, text: "/frobnicate") == .unknownCommand)
     }
 
+    // MARK: - Runtime allowlist changes (S12 — hot-reload, arm state preserved)
+
+    @Test func updateAllowlistAddsAndRemovesWhoIsRecognized() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)   // allowlist = [allowed]
+        let newcomer: Int64 = 222
+
+        // Before: the newcomer is an unknown user; `allowed` is recognized (its command is unknown).
+        #expect(guardState.authorize(fromId: newcomer, text: "/status") == .rejectedUnknownUser)
+
+        guardState.updateAllowlist([allowed, newcomer])
+        // Now the newcomer is recognized — a control command is handled, not dropped.
+        #expect(guardState.authorize(fromId: newcomer, text: "/status") == .control(.status(isArmed: false)))
+
+        // Removing an id revokes it immediately (I2 — immediate revocation).
+        guardState.updateAllowlist([newcomer])
+        #expect(guardState.authorize(fromId: allowed, text: "/status") == .rejectedUnknownUser)
+    }
+
+    @Test func updateAllowlistPreservesArmState() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
+        #expect(guardState.isArmed)
+
+        guardState.updateAllowlist([allowed, 222])   // editing identity must not drop a live session
+        #expect(guardState.isArmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .runAction(uptime))
+    }
+
     // MARK: - Casing
 
     @Test func controlTokensAreCaseInsensitive() {
