@@ -5,18 +5,21 @@
 
 ## Current state
 
-- **Phase:** implementation. **S7 done** — `CommandRunning` protocol + real `ProcessCommandRunner`
-  (`Process`, absolute path + fixed args, restricted PATH, timeout→terminate, stdout/stderr/exit
-  captured) (FR-5). The runner's logic *is* the real impl, so per CLAUDE it's tested directly
-  against safe builtins (the one allowed real-runner exception), and those tests pin invariants
-  **I1** (args never shell-interpreted) and **I4** (non-root, restricted env). No `CommandRunning`
-  fake yet — it belongs to S8, the first slice that drives the protocol.
-- **Next slice:** **S9 — Audit log** (last independent I/O slice: protocol + fake + append-only
-  file impl). Then **S8 — AppCoordinator** wires everything (needs S5–S7 + S9). See `PLAN.md`.
-  Suggested next: **S9 — Audit log**.
+- **Phase:** implementation. **S9 done** — `AuditSink` protocol + pure `AuditEntry`/`AuditEvent`
+  (one-line-per-command formatting) + real append-only `FileAuditLog` (FR-8). The pure `line`
+  rendering is the TDD'd core; it pins invariant **I3** by construction (entry carries only
+  timestamp/`from.id`/action+exit/reason — never output or a secret) and neutralizes newlines so
+  one received command can never inject extra audit lines. `FileAuditLog` is smoke-tested against
+  an isolated temp file (safe I/O — no Keychain/network/persistent side effects) proving
+  append-only round-trip. No `AuditSink` fake yet — it belongs to S8, the first slice that drives
+  the protocol (same no-fake-until-driven rule as S5–S7).
+- **Next slice:** **S8 — AppCoordinator** — wires transport → AuthGuard → ActionRegistry →
+  CommandRunning → OutputFormatter → transport + AuditSink. All dependency slices (S5–S7, S9) are
+  now done; S8 is unblocked. Build the `FakeTelegramTransport`, `FakeCommandRunner`, and
+  `InMemoryAuditSink` fakes here (first slice to drive those protocols). See `PLAN.md`.
 - **Blockers / open questions:** none. (Future-phase items parked in SPEC §10.)
-- ✅ **S1–S7 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
-  suite = **67 tests / 10 suites** passing (S7 added 7 runner tests + 1 suite).
+- ✅ **S1–S9 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests`
+  suite = **75 tests / 11 suites** passing (S9 added 8 audit tests + 1 suite).
   (CI remains push-to-`main`-only.)
 
 ## Slice status
@@ -32,7 +35,7 @@
 | S6  | Telegram transport           | ✅ done |
 | S7  | Command runner               | ✅ done |
 | S8  | AppCoordinator               | ☐ not started |
-| S9  | Audit log                    | ☐ not started |
+| S9  | Audit log                    | ✅ done |
 | S10 | Menu bar + Settings UI       | ☐ not started |
 | S11 | Lifecycle & login item       | ☐ not started |
 
@@ -41,6 +44,32 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
+
+- 2026-07-03 — S9: **`AuditSink.append` is non-throwing; the sink is best-effort.** PLAN says
+  `AuditSink { append(AuditEntry) }`. Auditing is background bookkeeping and must never interrupt
+  command handling, so `FileAuditLog` swallows its own write errors rather than propagating them
+  (contrast `SecretStore`, which throws because a failed secret op must surface). Rationale: a
+  full/locked disk should degrade logging, not break the `/uptime` you're waiting on.
+- 2026-07-03 — S9: **The audit *model* enforces I3 by construction, not by scrubbing.** `AuditEvent`
+  has exactly three cases — `actionRan(command, exitCode)`, `control(String)`, `rejected(reason)`
+  — and **no field can hold command output or a secret**. `actionRan` records only the command
+  token + exit code (SPEC §4.6: "no full output"), so a secret in stdout is structurally unable to
+  reach the log. Tested directly (`actionEntryCarriesNoOutputOrSecret`). The `Decision`+
+  `CommandResult` → `AuditEvent` mapping is **S8's** job (don't generalize the taxonomy ahead of
+  the slice that drives it).
+- 2026-07-03 — S9: **`AuditEntry.line` is the pure, TDD'd surface; it sanitizes free text to
+  guarantee one line per received command.** Newlines/CR/tab in `control`/`rejected`/command text
+  collapse to a space and inner `"`→`'`, so an operator (or unauthorized sender) can't inject a
+  forged extra audit line or break the quoted field — append-only integrity + I3. Format:
+  `<ISO8601-UTC> from=<id> action=/x exit=N | control="…" | rejected="…"`. Timestamp is fixed
+  UTC ISO-8601 via a static `ISO8601DateFormatter` (locale/tz-stable, greppable).
+- 2026-07-03 — S9: **`FileAuditLog` is smoke-tested (like the S7 runner), not compile-only (like
+  the S5 Keychain).** File append to an isolated temp file is safe — no persistent side effects,
+  no real Keychain, no network — so it's tested directly: two appends → two lines through the pure
+  formatter, second never clobbers the first (proves FR-8 append-only). It holds **zero** formatting
+  logic (delegates to `AuditEntry.line`), staying thin. Files in `Storage/` (`AuditEntry.swift`,
+  `FileAuditLog.swift`) auto-included via the file-system-synchronized group (objectVersion 77) —
+  no pbxproj edit. No `InMemoryAuditSink` fake yet — deferred to S8 (no-fake-until-driven).
 
 - 2026-06-30 — Design locked: allowlist-only execution, TOTP arm/disarm, personal local
   (non-sandboxed) install. Build split into TDD slices S0–S11.
@@ -218,6 +247,18 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-03 — S9 complete. Added `Storage/AuditEntry.swift` (`AuditEntry` + `AuditEvent`
+  {`actionRan(command,exitCode)`, `control(String)`, `rejected(reason)`} + pure `line` formatting
+  with free-text sanitization; `protocol AuditSink { append(AuditEntry) }`, non-throwing) and
+  `Storage/FileAuditLog.swift` (real append-only file sink: create-on-first-write, seek-to-end
+  append, thin — no formatting logic; swallows its own I/O errors). Tests:
+  `RelayBackTests/Storage/AuditLogTests.swift` (8 — action line w/ ts+from+cmd+exit; nonzero exit;
+  rejected reason; control detail; **I3** newlines neutralized to one line; embedded quotes can't
+  break out; **I3** action entry carries no output/secret; `FileAuditLog` temp-file smoke:
+  append-only, two lines, no clobber). Ran RED (types missing → build fail) → GREEN → refactor on
+  macOS: **75 tests / 11 suites green**. `Storage/` files auto-included (objectVersion 77) — no
+  pbxproj edit. **Next: S8 — AppCoordinator** — all dependency slices (S5–S7, S9) done; S8 wires
+  everything and builds the transport/runner/audit fakes (proves I1/I2 end-to-end).
 - 2026-07-02 — S7 complete. Added `Execution/CommandRunning.swift` (protocol: non-throwing
   `run(_ Action) async -> CommandResult`) and `Execution/ProcessCommandRunner.swift` (real `Process`
   impl: absolute path + fixed args → execve, `PATH`-only restricted env, concurrent pipe drain,
