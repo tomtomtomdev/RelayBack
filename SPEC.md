@@ -23,8 +23,13 @@ sends stdout/stderr/exit-code back to the chat.
 
 - **No arbitrary shell.** User text never reaches a shell. Only allowlisted actions run.
   (Arbitrary/confirmation-gated execution is a possible *future* phase, not v1.)
-- **No free-text command parameters.** Actions are parameterless in v1. (Constrained
-  enum parameters are a future consideration.)
+- **No arbitrary/free-text command parameters.** Actions accept **only validated argv
+  parameters** (see §4a): every parameter is passed as a fixed `Process` argv position —
+  never through a shell — and must pass a strict validator (enum / regex / path drawn from a
+  configured allowlist), `--`-guarded so it can never be reinterpreted as a flag. Operator
+  text never fills the executable slot and never an unvalidated argv position. (Amended
+  2026-07-03 for the dev-workflow actions — S15+. This is the "constrained enum parameters"
+  future phase §10 anticipated, now scoped in deliberately; arbitrary shell remains out.)
 - **No webhooks / inbound network server.** Outbound long-polling only.
 - **No multi-tenant / multi-Mac fleet.** One operator, one Mac.
 - **No notarization/sandbox in v1.** Personal local install. (Re-evaluate before sharing.)
@@ -67,10 +72,41 @@ sends stdout/stderr/exit-code back to the chat.
 
 ### Security invariants (must never be violated by any code change)
 - I1. No code path passes operator-supplied text to a shell or to `Process` as an
-  executable/arg. Actions are looked up; only registry-defined paths/args are spawned.
+  **executable** or as an **unvalidated** argument. `/bin/sh -c` is never used. Actions are
+  looked up; the executable and all fixed args come from the registry. Operator text may fill
+  a **validated parameter slot** only (§4a): it is placed at a fixed argv position after
+  passing that slot's validator and a `--` flag-guard — never concatenated, never a flag,
+  never the executable. "No shell, ever" is unchanged.
 - I2. No action executes unless: `from.id` ∈ allowlist **AND** session is ARMED.
 - I3. Token and TOTP secret are read only from Keychain; never logged or sent to Telegram.
 - I4. Process is never spawned with elevated privileges.
+
+### 4a. Validated parameters & working directory (dev-workflow actions, S15+)
+
+Some actions (git, xcodebuild) need a parameter or a repo context. These extend the model
+**without** relaxing I1 — they add validation, they do not add a shell.
+
+- **Parameters are validated argv, never shell.** A parameterized action declares typed
+  parameter slots. Each operator-supplied token is validated, then handed to `Process` at a
+  **fixed argv index**. Because there is no shell, metacharacters have no meaning
+  (`git commit -m "; rm -rf /"` writes that literal message). Validators:
+  - **repo name** — must equal a `name` in the configured repo allowlist; resolves to that
+    repo's absolute root. No path ever comes from chat, so traversal is impossible.
+  - **branch** — `^[A-Za-z0-9._/-]+$`, must not begin with `-`.
+  - **commit message** — length-capped, must not begin with `-`; a single argv token.
+  - A `--` separator precedes any value-bearing arg so a value can never become a flag.
+  - Validation failure → a `.invalidParameters(reason)` reply + audit line; nothing spawns.
+- **Working directory = named repo allowlist.** `Process.currentDirectoryURL` is set only to
+  an absolute root drawn from the configured repo list. There is no free-form `cd`.
+- **Remote ops are upstream-only.** `push`/`pull` use each repo's already-configured upstream;
+  no remote name or refspec is ever accepted from chat.
+- **Builds use fixed per-repo config.** `xcodebuild` scheme + destination come from the repo's
+  config entry, not from operator text — zero build-arg injection surface.
+
+Threat-model note: this widens the worst-case-on-full-auth-bypass from *read-only diagnostics*
+to *mutating git state and triggering builds in the configured repos*. It does **not** grant a
+shell, arbitrary file writes, arbitrary executables, or pushes to arbitrary remotes. Accepted
+for single-operator personal use; revisit before any multi-user or shared deployment.
 
 ## 5. Command grammar (operator-facing)
 
@@ -159,7 +195,8 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
 
 ## 10. Open questions / future phases
 
-- Constrained enum parameters for actions (e.g. `/tail <known-service>`).
+- ~~Constrained enum parameters for actions (e.g. `/tail <known-service>`).~~ **Scoped in
+  2026-07-03 as the dev-workflow actions (S15+); see §4a.**
 - Phase-2 confirmation-gated arbitrary execution (inline-keyboard ✅/❌).
 - Developer ID signing + notarization if the app is ever shared.
 - Streaming partial output + `/kill` for long-running actions.

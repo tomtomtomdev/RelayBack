@@ -298,6 +298,84 @@ is reference-only — not part of the build.)
 
 ---
 
+## Dev-workflow actions (S15–S19) — validated parameters + repo allowlist *(added 2026-07-03)*
+
+**Why added:** the operator wants to drive real dev tasks from Telegram — navigate to a repo,
+`checkout`/`pull`/`push`/`commit`, `xcodebuild`, run a simulator — instead of setting up
+Tailscale + SSH. This needs **parameterized actions**, a model v1 deliberately deferred. It is
+scoped in via the SPEC amendment (§2, §4/I1, **§4a**, §10) done alongside this plan: parameters
+are **validated argv, never shell**; working directory is a **named repo allowlist**; remote ops
+are **upstream-only**; builds use **fixed per-repo config**. I1 "no shell, ever" is unchanged.
+
+**Decisions locked** (2026-07-03): repos = named allowlist (config: name → root, scheme,
+destination, sim device); full git write power (commit/push/pull/checkout); xcodebuild uses fixed
+per-repo scheme+destination. Defaults chosen: `/pull` is `--ff-only`; `/commit` is `-a -m <msg>`
+(stages tracked changes, since there is no phone-side `git add`). Revisit either if it bites.
+
+**Scope guard:** every parameter goes through a pure validator (TDD'd) and lands at a fixed argv
+index; no operator text reaches a shell or the executable slot. Each git/exec slice adds an
+invariant test asserting a malicious value (shell metachars, leading-`-`, path traversal, unknown
+repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
+
+### S15 — Parameterized-action foundation *(pure + thin I/O; no new bot commands yet)*
+- **Goal:** the mechanism, exercised by tests only — no user-facing command wired.
+  - `Action.workingDirectory: String?` (nil = inherit, today's behavior); `ProcessCommandRunner`
+    sets `currentDirectoryURL` from it.
+  - Pure validators: `ParamValidator.repoName`, `.branch`, `.commitMessage` (charset/length,
+    reject leading `-`).
+  - A resolver: `(command, argTokens, repoTable) -> .ok(Action) | .invalid(reason)` that builds
+    the executable + fixed argv (with `--` guard) from validated tokens only.
+  - `Decision.invalidParameters(String)`; `AppCoordinator` replies `⚠️ <reason>` + audits it.
+- **Tests first (RED):** each validator's accept/reject table (esp. `-`, metachars, traversal,
+  unknown repo); resolver builds expected argv and refuses bad input; runner honors
+  `workingDirectory` (`/bin/pwd` in a temp dir smoke test); coordinator maps `.invalidParameters`
+  to a reply + audit line, **no runner call**.
+- **Done when:** foundation tests green; no new command is matchable yet (proven by a test).
+
+### S16 — Repo config + active-repo selection
+- **Goal:** `RepoConfig { name, root, scheme?, destination?, simulatorDevice? }` persisted via
+  `ConfigStore`; Settings UI to add/remove repos. Session **active-repo** state with `/cd <repo>`
+  (validated name → sets context), `/pwd` (active repo + path + current branch), `/repos` (list).
+  Active repo lives with the session (like arm state); cleared on disarm.
+- **Tests first (RED):** repo list round-trips through `ConfigStore`; `/cd` unknown name →
+  `.invalidParameters`; `/cd` valid sets context; git/exec command with no active repo →
+  `.invalidParameters("select a repo first")`; `/repos` never leaks anything beyond name/root.
+- **Done when:** config + selection tests green; Settings repo editor usable in a Preview.
+
+### S17 — Git commands
+- **Goal:** operate on the active repo via `/usr/bin/git` with fixed argv + validated params:
+  `/gitstatus` (`status`), `/branch` (`branch`), `/checkout <branch>` (`checkout -- <branch>`),
+  `/pull` (`pull --ff-only`), `/push` (`push` — upstream only, no remote/refspec arg),
+  `/commit <msg>` (`commit -a -m <msg>`).
+- **Tests first (RED):** resolver builds the exact argv per command; `/checkout` rejects a
+  branch with metachars / leading `-`; `/push` and `/pull` accept **no** operator args; `/commit`
+  rejects a leading-`-` message and caps length; every command runs with cwd = active repo root.
+- **Done when:** git resolver/guard tests green; a real smoke test against a throwaway git repo
+  (init in a temp dir) confirms `/gitstatus` returns exit 0.
+
+### S18 — xcodebuild
+- **Goal:** `/build` → `/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination>
+  build`, cwd = active repo root, longer timeout. Scheme/destination come only from `RepoConfig`.
+- **Tests first (RED):** resolver builds the fixed argv from config; `/build` accepts no operator
+  args; a repo lacking a configured scheme → `.invalidParameters`. (No real build in CI — assert
+  argv + guard only; optional manual run on macOS.)
+- **Done when:** build resolver/guard tests green.
+
+### S19 — Simulator run *(most involved; xcrun simctl orchestration)*
+- **Goal:** `/sim` → build for the configured simulator, install, launch on `cfg.simulatorDevice`
+  via `/usr/bin/xcrun simctl` (multi-step: boot → install → launch). Device from config only.
+- **Tests first (RED):** the step sequence is built from config (fixed argv per step); unknown /
+  missing device → `.invalidParameters`; no operator arg accepted. Real end-to-end run is
+  macOS-manual only.
+- **Done when:** the orchestration builds the expected argv sequence in tests; documented manual
+  verification steps recorded in `PROGRESS.md`.
+
+**S15–S19 done when:** an armed operator can `/cd` to a configured repo and run the git/build/sim
+commands from a phone, every parameter is validated-argv (no shell, proven by invariant tests),
+the full suite is green, and no SPEC §4 invariant is weakened.
+
+---
+
 ## Definition of done (whole project, v1)
 
 All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended
