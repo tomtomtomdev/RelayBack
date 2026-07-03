@@ -16,14 +16,18 @@ final class MenuBarModel {
     var status: MenuBarStatus
     /// Most-recent audit lines, newest last; capped so the popover never grows unbounded.
     private(set) var recentAudit: [String]
+    /// The connected bot's `@username`, shown in the "listening" row. Wired in S13f; nil until then.
+    var botUsername: String?
 
     /// How many recent audit lines the popover retains.
     let recentLimit: Int
 
     init(status: MenuBarStatus = MenuBarStatus(isArmed: false, remaining: 0),
          recentAudit: [String] = [],
+         botUsername: String? = nil,
          recentLimit: Int = 5) {
         self.status = status
+        self.botUsername = botUsername
         self.recentLimit = recentLimit
         self.recentAudit = Array(recentAudit.suffix(recentLimit))
     }

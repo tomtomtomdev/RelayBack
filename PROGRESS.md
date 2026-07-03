@@ -5,6 +5,21 @@
 
 ## Current state
 
+- **S13a done — design conformance begun (app icon + disarmed popover shell).** The finalized
+  handoff icon set is integrated (`Assets.xcassets/AppIcon.appiconset` — 10 macOS PNGs +
+  `Contents.json` with `-2x` filenames, copied verbatim; `icon.svg` intentionally not added, it's
+  vector source not a build asset). New `Features/Theme/Theme.swift` holds the handoff design tokens
+  (colors/radii/brand gradient + a `Color(hex:)` helper) — plain constants, not unit-tested, verified
+  by Previews. `MenuBarStatus` gained pure `pillLabel` / `pillStyle` (`.armed`/`.disarmed`) /
+  `showsCountdown` / `countdown` (TDD'd — 2 new tests). `MenuBarRootView` rebuilt to the disarmed
+  design: 368px surface, brand-glyph header + status pill, locked-state card with the `/arm <code>`
+  mono chip, pulsing "Listening" row (`@bot` via new `MenuBarModel.botUsername`, nil until S13f), a
+  RECENT list, and a Settings/Quit footer. Armed body (action cards + last-result terminal card +
+  "Disarm now") is **S13b**; RECENT color-coding is **S13c**. **No core/security change** — pure
+  view-model + thin view only.
+- ✅ **S13a verified green on macOS** (this session): full `RelayBackTests` suite = **141 tests /
+  20 suites** passing (added `MenuBarStatusTests.disarmedPill` + `armedPillShowsCountdownChip`). App
+  builds clean; asset catalog compiles the new icon; disarmed/armed Previews render the new shell.
 - **Phase:** implementation. **S12 done — v1 is operationally complete (all slices S0–S12).** The
   authorization allowlist is now persisted and fed into the running `AuthGuard`, closing the last
   gap: an operator whose id is in the saved allowlist can `/arm` and run an allowlisted action
@@ -62,9 +77,16 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** none required for v1 — the whole-project Definition of Done (PLAN) is met. Optional
-  follow-ups if desired: per-second live menu-bar countdown; a real-Keychain/UserDefaults end-to-end
-  launch smoke; the future-phase items in SPEC §10.
+- **Next slice:** **S13b** — armed popover content (allowlisted-action cards from `ActionRegistry`,
+  last-result terminal card via a pure `LastResultPresentation(CommandResult)`, and a "Disarm now"
+  hook wired to `AuthGuard.disarm`); plumb `lastResult` + the disarm closure from
+  `AppCoordinator`/`AppRuntime` into the live `MenuBarModel`. v1 *logic* DoD is
+  met, but the SwiftUI surfaces don't match the high-fidelity design handoff
+  (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
+  in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
+  view-model extensions tested; thin views Preview-verified), without touching the verified core or
+  weakening any SPEC §4 invariant. Do one sub-slice per session. Other optional follow-ups: per-second
+  live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -89,6 +111,13 @@
 | S10 | Menu bar + Settings UI       | ✅ done |
 | S11 | Lifecycle & login item       | ✅ done |
 | S12 | Allowlist persistence & auth wiring *(new)* | ✅ done |
+| S13  | Design conformance — recreate handoff in SwiftUI *(new epic)* | ◐ in progress |
+| S13a | · App icon + popover shell (disarmed)            | ✅ done |
+| S13b | · Popover armed content (actions/result/disarm)  | ☐ not started |
+| S13c | · Recent-activity color coding                   | ☐ not started |
+| S13d | · Settings sidebar shell + Security pane         | ☐ not started |
+| S13e | · Allowlist pane + General pane                  | ☐ not started |
+| S13f | · Audit pane + Connection pane                   | ☐ not started |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 

@@ -151,6 +151,126 @@ includes: tests green, refactor pass done, `PROGRESS.md` updated.
 - **Done when:** persistence + wiring tests green; an operator whose id is in the saved allowlist
   can `/arm` and run an action end-to-end.
 
+### S13 — Design conformance: recreate the handoff in SwiftUI *(added after S12)*
+
+- **Why added:** v1 logic is complete (S0–S12) but the SwiftUI surfaces are a generic
+  functional scaffold, not the shipped **design handoff** (`design_handoff_relayback_app/` —
+  `RelayBack.dc.html` + `README.md`). The handoff is **high-fidelity** and explicitly asks for a
+  pixel-faithful native recreation (system font / SF Mono / SF Symbols, exact tokens). This epic
+  brings the UI up to that bar **without touching the verified core** — every change is either a
+  pure, test-first view-model extension or a thin, Preview-verified view. It also drops in the
+  finalized app icon, which was never integrated (`AppIcon.appiconset` has the 10 slots but no
+  PNGs / `filename` keys).
+- **Scope guard:** UI + view-model only. No change to `AuthGuard`, `ActionRegistry`,
+  `CommandRunning`, `TOTP`, or the security invariants (SPEC §4). The popover action list stays
+  **read-only** (execution is Telegram-only in v1 — do not add click-to-run). Secrets still flow
+  only through `SecretStore` (I3): the token stays a `SecureField`, never shown back; the base32
+  secret/QR derive from the store as today.
+- **Too big for one context — split into ordered sub-slices S13a–S13f.** Do one per session,
+  update `PROGRESS.md` between each. Later sub-slices depend on earlier ones (tokens → popover →
+  audit refactor → settings shell → panes).
+
+Shared groundwork (lands in S13a, reused throughout): a `Features/Theme` of the handoff's
+design tokens — colors (`#f4f5f9` popover, `#0a6cff` accent, `#34c759`/`#248a3d` armed,
+`#ff9f0a`/`#b76e00` warning, `#ff3b30` danger, `#0f1320` terminal, `155deg #4f6bff→#2aa9c9`
+brand gradient), radii (popover 14 / window 12 / cards 9–10 / pills 20), and font roles
+(system UI, SF Mono for commands/ids/output/countdowns). Tokens are plain constants — **not
+unit-tested**; verified by the Previews that consume them.
+
+#### S13a — App icon + popover shell (disarmed)
+- **Goal:** Drop the finalized icon set into `Assets.xcassets/AppIcon.appiconset` (copy the
+  handoff's `RelayBack.appiconset` contents — `Contents.json` already references the `-2x`
+  filenames; do not rename). Add the `Theme`. Rebuild `MenuBarRootView` to the **disarmed**
+  design: 368px shell, brand header (gradient app-glyph + "RelayBack" + a **status pill**),
+  locked-state card, "Listening for updates" row with a pulsing dot + `@bot` username, and the
+  Settings/Quit footer.
+- **Tests first (RED):** extend the pure `MenuBarStatus` — `pillLabel` (`"ARMED"`/`"DISARMED"`),
+  `pillStyle` (armed/disarmed enum the view maps to color), and `showsCountdown`. Assert the
+  disarmed mapping (label, style, no countdown, the "Send /arm…" detail).
+- **Done when:** icon renders in the built app; disarmed popover matches the handoff in a
+  Preview; `MenuBarStatus` tests green.
+
+#### S13b — Popover armed content (actions + last result + disarm)
+- **Goal:** The **armed** popover: green ARMED pill + mono countdown chip, the
+  **ALLOWLISTED ACTIONS** cards (command in accent blue + description), the dark **last-result**
+  terminal card (`$ /cmd`, `exit N`, output lines), and a **"Disarm now"** footer button.
+- **Tests first (RED):**
+  - `MenuBarModel.actions: [ActionSummary]` seeded read-only from `ActionRegistry` (command +
+    description only — no executable/args exposed to the UI). Assert it mirrors the registry.
+  - A pure `LastResultPresentation(CommandResult)` → (`commandLine`, `exitLabel`,
+    `exitIsSuccess`, `outputLines`). Assert exit-0 vs. nonzero framing and line splitting.
+  - `MenuBarModel.lastResult` push path + a `disarm` hook (closure the coordinator wires to
+    `AuthGuard.disarm`); assert "Disarm now" invokes it. **No new execution path** — assert the
+    action cards carry no runnable payload (guards I1 at the UI edge).
+- **Done when:** armed popover matches the handoff in a Preview; the new view-model tests green;
+  `AppCoordinator`/`AppRuntime` wire `lastResult` and the disarm hook into the live model.
+
+#### S13c — Recent-activity color coding
+- **Goal:** Replace the popover's plain `recentAudit: [String]` with structured, color-coded
+  rows (time · command · right-aligned status), amber for `rejected · disarmed`, red for
+  `rejected · unknown id`, default for runs — per the RECENT list in the handoff.
+- **Tests first (RED):** a pure `RecentActivityRow(from: AuditEntry)` mapping → (`time`,
+  `command`, `statusText`, `severity: .normal|.warning|.danger`). Assert each decision maps to
+  the right severity and that no secret/full-output leaks into a row (I3). Update `MenuBarModel`
+  to hold `[RecentActivityRow]`; adjust `MenuBarAuditSink`'s push to build rows.
+- **Done when:** mapping + model tests green; the RECENT list renders color-coded in a Preview;
+  `MenuBarAuditSink` refactor keeps its existing tests green.
+
+#### S13d — Settings sidebar shell + Security pane
+- **Goal:** Reshape Settings from the single grouped `Form` into the handoff's **sidebar window**
+  (Connection · Allowlist · Security · Audit · General) at ~660px. Build the **Security** pane to
+  spec: QR card, `SECRET (BASE32)` row with **Copy**, **Regenerate** + **Show otpauth://**
+  buttons, the green **Keychain-assurance banner**, and **Idle timeout** / **Drift tolerance**
+  rows.
+- **Decision to make first:** are idle-timeout and drift-tolerance **configurable** or
+  **display-only**? SPEC pins the TOTP config fixed and `OtpAuthURI` is pinned to it — so default
+  to **display-only** rows reflecting the real configured values (a pure formatter, testable),
+  and only make them editable if the SPEC is updated deliberately. Record the choice in
+  `PROGRESS.md`.
+- **Tests first (RED):** a pure `SettingsPane` enum (nav model) if the selection needs logic;
+  a pure formatter for the idle-timeout `m:ss` pill and the drift subtitle. Copy-to-pasteboard
+  and the reveal toggle are thin glue — Preview/manual verified, no new test.
+- **Done when:** sidebar swaps panes; Security pane matches the handoff in a Preview; the pane
+  and formatter tests green; secrets still only via `SecretStore`.
+
+#### S13e — Allowlist pane + General pane
+- **Goal:** The **Allowlist** pane styled to spec (member rows: avatar initial + label + mono id
+  + `primary`/`Remove` affordances; add-id row) and a small **General** pane (launch-at-login
+  toggle relocated here).
+- **Decision to make first:** the handoff shows per-member **labels** and a **primary** badge,
+  but `ConfigStore`/`AllowlistDraft` store bare `Int64`s. Either (a) keep **ids-only** and treat
+  names/avatars as illustrative (render an initial from the id, no label store) — smallest, no
+  data-model change — or (b) extend the config to carry an optional label + primary flag
+  (test-first on `AllowlistDraft`, persisted through `ConfigStore`). Recommend (a) for v1 unless
+  labels are wanted; record the choice.
+- **Tests first (RED):** only if (b) — `AllowlistDraft` label/primary handling and its
+  round-trip through `ConfigStore`. If (a), no new logic (styling only) — Preview-verified.
+- **Done when:** both panes match the handoff in a Preview; any new draft/config tests green.
+
+#### S13f — Audit pane + Connection pane
+- **Goal:** The **Audit** pane (append-only, newest-first, columns Time · from.id ·
+  Action/decision · Exit, zebra rows, color-coded by decision/exit) and the **Connection** pane
+  (connected `@botUsername` vs. error).
+- **New seams (behind protocols, with fakes):**
+  - `AuditReading` — a **read** side for the audit log (the current `AuditSink` is write-only).
+    TDD a pure `AuditRowPresentation(AuditEntry)` → columns + severity against a fake reader;
+    keep the real file-read impl thin (bounded tail) and smoke-test only. **Assert no
+    secret/full-output column (I3).**
+  - Connection state on the view model — `.connecting | .connected(botUsername:) | .error`.
+    Obtaining the username needs a transport `getMe` (or deriving it from a successful poll):
+    **decision** — add `getMe` to `TelegramTransport` (fake it in tests) vs. show a generic
+    connected state without the username. Record the choice.
+- **Tests first (RED):** `AuditRowPresentation` mapping (all decisions/exit cases, secret-free);
+  a pure `connectionState → (label, style)` mapping.
+- **Done when:** both panes match the handoff in a Preview; mapping + fake-backed reader tests
+  green; real audit-reader smoke test green; transport addition (if chosen) fake-tested.
+
+**S13 done when:** all sub-slices complete, the six handoff surfaces (menu-bar disarmed/armed,
+Settings Security/Allowlist/Audit + Connection/General) match the design in Previews and the
+running app, the finalized icon ships, the full `RelayBackTests` suite is green with the new
+pure-mapping tests, and no security invariant (SPEC §4) was weakened. (Telegram chat surface #6
+is reference-only — not part of the build.)
+
 ---
 
 ## Definition of done (whole project, v1)

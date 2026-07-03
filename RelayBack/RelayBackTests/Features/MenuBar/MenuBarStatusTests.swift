@@ -34,4 +34,21 @@ struct MenuBarStatusTests {
     @Test func clockStringClampsNegativeToZero() {
         #expect(MenuBarStatus.clockString(-10) == "0:00")
     }
+
+    // S13a — the status pill (label + style) and the armed countdown chip the popover renders.
+
+    @Test func disarmedPill() {
+        let status = MenuBarStatus(isArmed: false, remaining: 0)
+        #expect(status.pillLabel == "DISARMED")
+        #expect(status.pillStyle == .disarmed)
+        #expect(status.showsCountdown == false)
+    }
+
+    @Test func armedPillShowsCountdownChip() {
+        let status = MenuBarStatus(isArmed: true, remaining: 278)
+        #expect(status.pillLabel == "ARMED")
+        #expect(status.pillStyle == .armed)
+        #expect(status.showsCountdown == true)
+        #expect(status.countdown == "4:38")
+    }
 }
