@@ -18,7 +18,8 @@ struct MenuBarModelTests {
         let expected = ActionRegistry.seed.actions.map { ActionSummary($0) }
 
         #expect(model.actions == expected)
-        #expect(model.actions.map(\.command) == ["/uptime", "/disk", "/whoami"])
+        #expect(model.actions.map(\.command) == ["/uptime", "/disk", "/whoami", "/ip",
+                                                  "/mem", "/top", "/ps", "/netstat", "/battery", "/date"])
         // I1 at the UI edge: a summary exposes only the command + description — no executable,
         // arguments, or timeout that the popover could turn into a spawn.
         #expect(model.actions.first?.description == ActionRegistry.seed.actions.first?.description)

@@ -23,8 +23,36 @@ struct ActionRegistryTests {
     }
 
     @Test func matchesAllSeededCommands() {
-        for command in ["/uptime", "/disk", "/whoami"] {
+        for command in ["/uptime", "/disk", "/whoami", "/ip",
+                        "/mem", "/top", "/ps", "/netstat", "/battery", "/date"] {
             #expect(ActionRegistry.seed.match(command)?.command == command)
+        }
+    }
+
+    @Test func ipRunsFixedAbsolutePathWithNoOperatorArgs() throws {
+        // /ip is a read-only network-interface dump: fixed absolute executable, fixed args,
+        // nothing derived from operator text (invariant I1).
+        let action = try #require(ActionRegistry.seed.match("/ip"))
+        #expect(action.executable == "/sbin/ifconfig")
+        #expect(action.executable.hasPrefix("/"))
+    }
+
+    // Each read-only diagnostic names a fixed absolute executable and a fixed argument array;
+    // operator text only selects the entry — it never becomes the executable or an argument (I1).
+    @Test func readOnlyDiagnosticsHaveFixedAbsoluteExecutableAndArgs() throws {
+        let expected: [String: (executable: String, arguments: [String])] = [
+            "/mem":     ("/usr/bin/vm_stat", []),
+            "/top":     ("/usr/bin/top", ["-l", "1", "-n", "15", "-o", "cpu"]),
+            "/ps":      ("/bin/ps", ["aux"]),
+            "/netstat": ("/usr/sbin/netstat", ["-rn"]),
+            "/battery": ("/usr/bin/pmset", ["-g", "batt"]),
+            "/date":    ("/bin/date", []),
+        ]
+        for (command, spec) in expected {
+            let action = try #require(ActionRegistry.seed.match(command), "\(command) missing")
+            #expect(action.executable == spec.executable)
+            #expect(action.executable.hasPrefix("/"))
+            #expect(action.arguments == spec.arguments)
         }
     }
 
