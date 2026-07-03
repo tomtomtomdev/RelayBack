@@ -34,6 +34,9 @@ final class SettingsModel {
     private(set) var totpSecret: Data?
     /// A short, secret-free message surfaced to the UI after a failed Keychain operation.
     private(set) var lastError: String?
+    /// A short message surfaced under the allowlist section when an add is rejected (invalid input
+    /// or a duplicate), so a rejected id is never silently dropped. Cleared on a successful add.
+    private(set) var allowlistError: String?
 
     /// Called after every allowlist change with the new ids, so the composition root can hot-reload
     /// the running `AuthGuard` (S12). Not set in tests that only assert persistence.
@@ -97,9 +100,15 @@ final class SettingsModel {
     @discardableResult
     func addId() -> AllowlistDraft.AddResult {
         let result = allowlist.add(newIdText)
-        if case .added = result {
+        switch result {
+        case .added:
             newIdText = ""
+            allowlistError = nil
             persistAllowlist()
+        case .invalid:
+            allowlistError = "Not a valid Telegram id — enter the numeric from.id."
+        case .duplicate:
+            allowlistError = "That id is already on the allowlist."
         }
         return result
     }

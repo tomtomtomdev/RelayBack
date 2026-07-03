@@ -431,6 +431,13 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
 
+- 2026-07-03 — Bugfix (post-S12): **Settings allowlist add failed silently.** `SettingsView`'s Add
+  button discarded the `AddResult`, so `.invalid`/`.duplicate` input gave zero feedback (reads as
+  "can't add IDs"). Added `SettingsModel.allowlistError` (set on invalid/duplicate, cleared on a
+  successful add) + a red caption under the allowlist section. TDD: 3 new `SettingsModelTests`
+  (invalid/duplicate surface a message, success clears it). Suite green, app builds. Happy-path add
+  was already correct — the defect was purely the missing UX feedback.
+
 - 2026-07-03 — S12 complete. Allowlist persistence & runtime auth wiring — the last gap; **v1 DoD
   met**. New `Storage/ConfigStore.swift` (protocol, non-secret/non-throwing/fails-closed) +
   `Storage/UserDefaultsConfigStore.swift` (real, `[Int]`-backed) + `Support/InMemoryConfigStore.swift`

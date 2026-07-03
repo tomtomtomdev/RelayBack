@@ -77,6 +77,31 @@ struct SettingsModelTests {
         #expect(model.newIdText == "nope")   // kept so the operator can fix it
     }
 
+    @Test func invalidAddSurfacesAnErrorMessage() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        model.newIdText = "@handle"
+        #expect(model.addId() == .invalid)
+        #expect(model.allowlistError != nil)   // no more silent rejection
+    }
+
+    @Test func duplicateAddSurfacesAnErrorMessage() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(allowlist: [42]))
+        model.newIdText = "42"
+        #expect(model.addId() == .duplicate)
+        #expect(model.allowlistError != nil)
+    }
+
+    @Test func successfulAddClearsAnyPriorAllowlistError() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        model.newIdText = "nope"
+        _ = model.addId()
+        #expect(model.allowlistError != nil)
+
+        model.newIdText = "42"
+        #expect(model.addId() == .added(42))
+        #expect(model.allowlistError == nil)   // cleared on success
+    }
+
     // MARK: - Allowlist persistence (S12 — ConfigStore-backed, notifies the live guard)
 
     @Test func loadsAllowlistFromConfigStore() {

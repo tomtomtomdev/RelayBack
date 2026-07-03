@@ -66,6 +66,9 @@ struct SettingsView: View {
                 Button("Add") { model.addId() }
                     .disabled(model.newIdText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            if let error = model.allowlistError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
         }
     }
 
