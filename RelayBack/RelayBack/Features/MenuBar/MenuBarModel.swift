@@ -14,8 +14,9 @@ import Foundation
 final class MenuBarModel {
     /// Current arm status, as rendered by the popover.
     var status: MenuBarStatus
-    /// Most-recent audit lines, newest last; capped so the popover never grows unbounded.
-    private(set) var recentAudit: [String]
+    /// Most-recent activity, newest last; capped so the popover never grows unbounded. Each row is
+    /// a color-coded, secret-free view of one audit entry (S13c).
+    private(set) var recentActivity: [RecentActivityRow]
     /// The connected bot's `@username`, shown in the "listening" row. Wired in S13f; nil until then.
     var botUsername: String?
 
@@ -33,7 +34,7 @@ final class MenuBarModel {
     let recentLimit: Int
 
     init(status: MenuBarStatus = MenuBarStatus(isArmed: false, remaining: 0),
-         recentAudit: [String] = [],
+         recentActivity: [RecentActivityRow] = [],
          botUsername: String? = nil,
          actions: [ActionSummary] = ActionRegistry.seed.actions.map(ActionSummary.init),
          lastResult: LastResultPresentation? = nil,
@@ -43,14 +44,14 @@ final class MenuBarModel {
         self.actions = actions
         self.lastResult = lastResult
         self.recentLimit = recentLimit
-        self.recentAudit = Array(recentAudit.suffix(recentLimit))
+        self.recentActivity = Array(recentActivity.suffix(recentLimit))
     }
 
-    /// Records one audit line, dropping the oldest beyond `recentLimit`.
-    func appendAudit(_ line: String) {
-        recentAudit.append(line)
-        if recentAudit.count > recentLimit {
-            recentAudit.removeFirst(recentAudit.count - recentLimit)
+    /// Records one activity row, dropping the oldest beyond `recentLimit`.
+    func appendActivity(_ row: RecentActivityRow) {
+        recentActivity.append(row)
+        if recentActivity.count > recentLimit {
+            recentActivity.removeFirst(recentActivity.count - recentLimit)
         }
     }
 }

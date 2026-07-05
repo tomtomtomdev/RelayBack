@@ -5,6 +5,21 @@
 
 ## Current state
 
+- **S13c done — recent-activity color coding.** The popover's RECENT list is now structured,
+  color-coded rows instead of raw audit strings. New pure type (TDD'd): `Features/MenuBar/
+  RecentActivityRow` — `RecentActivityRow(from: AuditEntry)` → (`time` UTC `HH:mm`, `command`,
+  `statusText`, `severity: .normal|.warning|.danger`). Severity follows security weight: **red**
+  for an unauthorized sender (`unknown user`) or a non-zero exit, **amber** for a disarmed block /
+  failed arm (`bad code`), default otherwise. It is built only from the audit record's fields —
+  which never carry command output or a secret — so **I3** holds at the UI edge for free.
+  `MenuBarModel` now holds `recentActivity: [RecentActivityRow]` (was `recentAudit: [String]`) via
+  `appendActivity`; `MenuBarAuditSink` builds the row from the entry it already forwards.
+  `MenuBarRootView`'s RECENT renders time · command (mono) · severity-tinted status (new
+  `RecentActivityRow.Severity.color` Theme token). **No core/security change** — pure view-model +
+  thin view; execution stays Telegram-only.
+- ✅ **S13c verified green on macOS** (this session): full `RelayBackTests` suite = **167 tests /
+  24 suites** passing (added `RecentActivityRowTests` (9); `MenuBarAuditSinkTests` adapted to the
+  row API). App builds clean; the disarmed Preview renders the color-coded RECENT list.
 - **S14 done — persistent connection-lifecycle logging.** The poll loop now keeps a persistent,
   append-only record of transport health at `~/Library/Application Support/RelayBack/connection.log`,
   separate from the command audit log (FR-8 = received commands only). New pure types (TDD'd):
@@ -114,12 +129,16 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S13c** — recent-activity color coding: replace the popover's plain
-  `recentAudit: [String]` with structured, color-coded rows via a pure `RecentActivityRow(from:
-  AuditEntry)` → (`time`, `command`, `statusText`, `severity: .normal|.warning|.danger`) — amber for
-  `rejected · disarmed`, red for `rejected · unknown id`, default for runs; assert no secret/full
-  output leaks into a row (I3). Update `MenuBarModel` to hold `[RecentActivityRow]` and refactor
-  `MenuBarAuditSink`'s push to build rows (keep its existing test green). v1 *logic* DoD is
+- **Next slice:** **S13d** — Settings sidebar shell + Security pane: reshape Settings from the
+  single grouped `Form` into the handoff's sidebar window (Connection · Allowlist · Security ·
+  Audit · General) at ~660px, and build the **Security** pane to spec (QR card, `SECRET (BASE32)`
+  row + Copy, Regenerate / Show `otpauth://`, the green Keychain-assurance banner, and Idle-timeout
+  / Drift-tolerance rows). **Decide first (record here):** are idle-timeout & drift-tolerance
+  **configurable** or **display-only**? Default to **display-only** — SPEC pins the TOTP config
+  fixed and `OtpAuthURI` is pinned to it — unless the SPEC is updated deliberately. Tests-first: a
+  pure `SettingsPane` nav enum (if the selection needs logic) + a pure formatter for the idle `m:ss`
+  pill / drift subtitle; copy-to-pasteboard + reveal toggle are thin glue (Preview-verified).
+  Secrets still only via `SecretStore`. v1 *logic* DoD is
   met, but the SwiftUI surfaces don't match the high-fidelity design handoff
   (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
   in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
@@ -153,7 +172,7 @@
 | S13  | Design conformance — recreate handoff in SwiftUI *(new epic)* | ◐ in progress |
 | S13a | · App icon + popover shell (disarmed)            | ✅ done |
 | S13b | · Popover armed content (actions/result/disarm)  | ✅ done |
-| S13c | · Recent-activity color coding                   | ☐ not started |
+| S13c | · Recent-activity color coding                   | ✅ done |
 | S13d | · Settings sidebar shell + Security pane         | ☐ not started |
 | S13e | · Allowlist pane + General pane                  | ☐ not started |
 | S13f | · Audit pane + Connection pane                   | ☐ not started |
@@ -165,6 +184,26 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-05 — S13c: **`RecentActivityRow` maps from the existing `AuditEntry` — no core change, so
+  I3 holds for free.** The row is built solely from the audit record's fields (time, command, exit
+  code, or rejection reason), and `AuditEntry` has no field that can hold command output or a secret
+  (S9), so nothing sensitive can reach the popover. This keeps the color-coding a pure UI concern
+  and leaves the verified audit/run path untouched.
+- 2026-07-05 — S13c: **A rejection row's command column reads "rejected", not the offending
+  command.** `AuditEvent.rejected(reason:)` carries only the reason — not the command token that was
+  rejected — so a real row can show the reason but not the `/command`. Surfacing the rejected command
+  would mean widening the S9 audit model (a core, I3-sensitive change), deliberately out of this UI
+  slice. The old preview strings (`/run rejected · disarmed`) were illustrative; previews now build
+  rows from real `AuditEntry`s so they reflect what actually renders.
+- 2026-07-05 — S13c: **A failed run (non-zero exit) is `danger` (red), sharpening PLAN's "default
+  for runs."** A successful run is `.normal`; a non-zero exit is flagged red, consistent with the
+  last-result terminal card's success/failure coloring. Severity map: `unknown user`/non-zero exit →
+  danger; `disarmed`/`bad code` → warning; everything else (control events, `unknown command`) →
+  normal. Matched by lowercased substring so a lightly-reworded reason still lands in the right bucket.
+- 2026-07-05 — S13c: **RECENT time is UTC `HH:mm`, matching the audit log's clock.** Uses a dedicated
+  `HH:mm` `DateFormatter` pinned to UTC + `en_US_POSIX` (not the ISO8601 `LogText` formatter), so the
+  popover time lines up with the log and is deterministic under test regardless of the machine's time
+  zone. (A user-facing local time would make the pure mapping non-deterministic to assert.)
 - 2026-07-03 — S14: **Connection log is a SEPARATE file, not folded into the audit log.** SPEC
   FR-8's `audit.log` is scoped to *received commands*; connection lifecycle (connect/disconnect) is
   a different concern the planned S13f Connection pane surfaces separately, so it gets its own
@@ -535,6 +574,19 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 ## Log
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
+
+- 2026-07-05 — S13c complete. Recent-activity color coding. Pure/TDD:
+  `Features/MenuBar/RecentActivityRow.swift` (`RecentActivityRow(from: AuditEntry)` →
+  time/command/statusText/`Severity{normal,warning,danger}`; severity by security weight, time UTC
+  `HH:mm`). Replaced `MenuBarModel.recentAudit: [String]` + `appendAudit` with `recentActivity:
+  [RecentActivityRow]` + `appendActivity`; `MenuBarAuditSink` now builds a row from the entry it
+  already forwards. `MenuBarRootView` RECENT renders time · command (mono) · severity-tinted status;
+  added a `RecentActivityRow.Severity.color` Theme extension (amber=warningText, red=danger, else
+  secondary) + honest preview rows built from real `AuditEntry`s. Ran RED (`cannot find
+  'RecentActivityRow'`) → GREEN → refactor on macOS: **167 tests / 24 suites green** (was 158/23; +9
+  = new `RecentActivityRowTests`; `MenuBarAuditSinkTests` adapted to the row API). New file
+  auto-included (objectVersion 77) — no pbxproj edit. **Next: S13d** (Settings sidebar shell +
+  Security pane).
 
 - 2026-07-03 — S14 complete (new slice, beyond original PLAN). Persistent connection-lifecycle
   logging. Pure/TDD: `Storage/ConnectionLogEntry.swift` (`ConnectionEvent`, `ConnectionLogEntry.line`,

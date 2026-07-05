@@ -85,6 +85,18 @@ extension MenuBarStatus.PillStyle {
     }
 }
 
+extension RecentActivityRow.Severity {
+    /// The RECENT status color for this severity (S13c): amber for a disarmed/failed-arm block,
+    /// red for an unauthorized sender or a failed run, secondary text for everything benign.
+    var color: Color {
+        switch self {
+        case .normal: return Theme.textSecondary
+        case .warning: return Theme.warningText
+        case .danger: return Theme.danger
+        }
+    }
+}
+
 extension Color {
     /// Builds a `Color` from a 24-bit `0xRRGGBB` literal — keeps the token table above readable.
     init(hex: UInt32, opacity: Double = 1) {

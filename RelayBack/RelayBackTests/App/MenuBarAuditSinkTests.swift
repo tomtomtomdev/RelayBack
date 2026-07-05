@@ -4,7 +4,7 @@
 //
 //  S11 — the audit-sink decorator that also feeds the menu bar. It must forward every entry to the
 //  wrapped sink (so the file log is unaffected) and mirror it into the live `MenuBarModel`: append
-//  the (already sanitized, secret-free) audit line and refresh the arm status.
+//  a (secret-free) color-coded activity row and refresh the arm status. (Row shape updated in S13c.)
 //
 
 import Foundation
@@ -24,8 +24,8 @@ struct MenuBarAuditSinkTests {
                                event: .control("armed"))
         sink.append(entry)
 
-        #expect(base.entries.map(\.line) == [entry.line])   // file log still gets the entry
-        #expect(menuBar.recentAudit == [entry.line])         // and the popover shows it
+        #expect(base.entries.map(\.line) == [entry.line])              // file log still gets the entry
+        #expect(menuBar.recentActivity == [RecentActivityRow(from: entry)]) // popover shows the row
         #expect(menuBar.status == MenuBarStatus(isArmed: true, remaining: 42))
     }
 }

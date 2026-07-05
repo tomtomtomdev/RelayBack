@@ -175,23 +175,42 @@ struct MenuBarRootView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .kerning(0.5)
                 .foregroundStyle(Theme.textTertiary)
-            if model.recentAudit.isEmpty {
+            if model.recentActivity.isEmpty {
                 Text("No recent activity.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
             } else {
-                ForEach(Array(model.recentAudit.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                ForEach(Array(model.recentActivity.enumerated()), id: \.offset) { _, row in
+                    recentRow(row)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// One RECENT line: time · command (mono) · right-aligned status, the status tinted by severity.
+    private func recentRow(_ row: RecentActivityRow) -> some View {
+        HStack(spacing: 8) {
+            Text(row.time)
+                .font(.system(size: 12, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(Theme.textTertiary)
+            Text(row.command)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            if !row.statusText.isEmpty {
+                Text(row.statusText)
+                    .font(.system(size: 12, weight: row.severity == .normal ? .regular : .medium))
+                    .foregroundStyle(row.severity.color)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
     }
 
     // MARK: - Footer
@@ -349,12 +368,19 @@ private struct PulsingDot: View {
     }
 }
 
+/// Builds a RECENT row from an event at a fixed UTC time — Previews only.
+private func previewRow(_ t: TimeInterval, _ event: AuditEvent) -> RecentActivityRow {
+    RecentActivityRow(from: AuditEntry(timestamp: Date(timeIntervalSince1970: t), fromId: 1, event: event))
+}
+
 #Preview("Disarmed") {
     MenuBarRootView(model: MenuBarModel(
-        recentAudit: [
-            "14:02  /uptime            ok",
-            "14:05  /run               rejected · disarmed",
-            "14:07  /disk              rejected · unknown id",
+        recentActivity: [
+            previewRow(1_000_000, .actionRan(command: "/uptime", exitCode: 0)),   // normal · ok
+            previewRow(1_000_120, .control("armed")),                             // normal
+            previewRow(1_000_300, .rejected(reason: "disarmed")),                 // warning · amber
+            previewRow(1_000_460, .actionRan(command: "/disk", exitCode: 1)),     // danger · exit 1
+            previewRow(1_000_620, .rejected(reason: "unknown user")),             // danger · red
         ],
         botUsername: "relayback_bot"
     ))
