@@ -5,6 +5,23 @@
 
 ## Current state
 
+- **S13d done — Settings sidebar shell + Security pane.** `SettingsView` was reshaped from the
+  single grouped `Form` into the handoff's **176px sidebar window** (660×520): a sidebar of five
+  panes — Connection · Allowlist · **Security** · Audit · General — swaps the content area. New pure
+  types (TDD'd): `Features/Settings/SettingsPane` (nav enum: ordered `allCases`, per-pane `title` +
+  SF Symbol) and `Features/Settings/ArmingConfigPresentation` (idle-timeout `m:ss` pill via
+  `MenuBarStatus.clockString`, `driftIsEnabled`, and the drift subtitle). The **Security** pane is
+  built to spec: QR card, `SECRET (BASE32)` row + **Copy**, **Regenerate secret** (primary) / **Show
+  otpauth://** (reveal toggle), the green **Keychain-assurance banner**, and **display-only**
+  Idle-timeout (`5:00`) / Drift-tolerance (±1, RFC 6238) rows. `SettingsModel` gained a read-only
+  `armingConfig` (defaults 300s / ±1 — mirrors `AppRuntime`/`AuthGuard`/`TOTP`). The other panes
+  keep the existing token/allowlist/launch-at-login controls reachable (restyled in **S13e**
+  allowlist+general, **S13f** connection+audit; Audit is a placeholder for now). Copy-to-pasteboard
+  and the otpauth reveal are thin glue (Preview-verified). **No core/security change** — secrets
+  still flow only through `SecretStore` (I3); idle/drift are display, not editable.
+- ✅ **S13d verified green on macOS** (this session): full `RelayBackTests` suite = **176 tests /
+  26 suites** passing (added `SettingsPaneTests` (5) + `ArmingConfigPresentationTests` (3)). App
+  builds clean; the configured/empty Security-pane Previews render the new sidebar + pane.
 - **Seed allowlist expanded (post-S13c, commit `8bce16e`).** `ActionRegistry.seed` grew from the
   3 original read-only diagnostics to **10**: added `/ip` (`/sbin/ifconfig`), `/mem`
   (`/usr/bin/vm_stat`), `/top` (`/usr/bin/top -l 1 -n 15 -o cpu`), `/ps` (`/bin/ps aux`),
@@ -146,17 +163,16 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S13d** — Settings sidebar shell + Security pane: reshape Settings from the
-  single grouped `Form` into the handoff's sidebar window (Connection · Allowlist · Security ·
-  Audit · General) at ~660px, and build the **Security** pane to spec (QR card, `SECRET (BASE32)`
-  row + Copy, Regenerate / Show `otpauth://`, the green Keychain-assurance banner, and Idle-timeout
-  / Drift-tolerance rows). **Decide first (record here):** are idle-timeout & drift-tolerance
-  **configurable** or **display-only**? Default to **display-only** — SPEC pins the TOTP config
-  fixed and `OtpAuthURI` is pinned to it — unless the SPEC is updated deliberately. Tests-first: a
-  pure `SettingsPane` nav enum (if the selection needs logic) + a pure formatter for the idle `m:ss`
-  pill / drift subtitle; copy-to-pasteboard + reveal toggle are thin glue (Preview-verified).
-  Secrets still only via `SecretStore`. v1 *logic* DoD is
-  met, but the SwiftUI surfaces don't match the high-fidelity design handoff
+- **Next slice:** **S13e** — Allowlist pane + General pane: style the **Allowlist** pane to the
+  handoff (member rows: avatar initial + label + mono id + `primary`/`Remove`; add-id row) and the
+  small **General** pane (launch-at-login relocated). **Decide first (record here):** the handoff
+  shows per-member **labels** + a **primary** badge, but `ConfigStore`/`AllowlistDraft` store bare
+  `Int64`s — either (a) keep **ids-only** (render an initial from the id, no label store — smallest,
+  no data-model change) or (b) extend the config with an optional label + primary flag (test-first on
+  `AllowlistDraft`, round-tripped through `ConfigStore`). Recommend **(a)** for v1. Then **S13f**
+  (Audit + Connection panes) needs new seams — an `AuditReading` read side + `TelegramTransport.getMe`
+  (or a generic connected state). v1 *logic* DoD is
+  met, but the remaining SwiftUI surfaces don't yet match the high-fidelity design handoff
   (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
   in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
   view-model extensions tested; thin views Preview-verified), without touching the verified core or
@@ -190,7 +206,7 @@
 | S13a | · App icon + popover shell (disarmed)            | ✅ done |
 | S13b | · Popover armed content (actions/result/disarm)  | ✅ done |
 | S13c | · Recent-activity color coding                   | ✅ done |
-| S13d | · Settings sidebar shell + Security pane         | ☐ not started |
+| S13d | · Settings sidebar shell + Security pane         | ✅ done |
 | S13e | · Allowlist pane + General pane                  | ☐ not started |
 | S13f | · Audit pane + Connection pane                   | ☐ not started |
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
@@ -210,6 +226,24 @@ _Two open tracks remain: the **S13d–S13f** design-conformance sub-slices (Sett
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-06 — S13d: **Idle-timeout & drift-tolerance are DISPLAY-ONLY (the S13d decision).** SPEC
+  §9 pins the TOTP config fixed and `TOTP`/`OtpAuthURI` are pinned to it; `AuthGuard` uses a fixed
+  300s idle window and `TOTP.validate` defaults to `driftSteps: 1`. So the two Security-pane rows
+  reflect the real configured constants via the pure, testable `ArmingConfigPresentation` (idle
+  `m:ss`, drift subtitle) rather than editing them — the drift toggle is `.constant(...).disabled`.
+  Making them editable would require a deliberate SPEC change. `SettingsModel.armingConfig`
+  (defaults 300 / 1) is the single value the pane binds to; those defaults mirror `AppRuntime`.
+- 2026-07-06 — S13d: **The sidebar is a plain `HStack(sidebar | content)`, not `NavigationSplitView`.**
+  The handoff is a fixed-size (660×520) five-item settings sidebar with a custom active-row treatment
+  (accent fill, white text, blue shadow); a hand-rolled `HStack` + per-row `Button` gives exact
+  control over that styling and a fixed 176px rail, which the stock `NavigationSplitView` sidebar
+  chrome fights. `selection` is local `@State: SettingsPane` (defaults `.security`, the featured pane).
+- 2026-07-06 — S13d: **Panes not owned by this slice keep their existing controls, restyled later.**
+  Rather than lose reachable functionality, Connection hosts the bot-token field (S13f refines),
+  Allowlist hosts the existing id editor (S13e restyles to member rows), General hosts launch-at-login
+  (S13e), and Audit is a titled placeholder (S13f). Only the Security pane is built to full handoff
+  spec in S13d. Copy-to-pasteboard (`NSPasteboard`) and the otpauth reveal are thin view glue — no
+  new test; the pure nav + arming-config logic is what's TDD'd.
 - 2026-07-05 — S13c: **`RecentActivityRow` maps from the existing `AuditEntry` — no core change, so
   I3 holds for free.** The row is built solely from the audit record's fields (time, command, exit
   code, or rejection reason), and `AuditEntry` has no field that can hold command output or a secret

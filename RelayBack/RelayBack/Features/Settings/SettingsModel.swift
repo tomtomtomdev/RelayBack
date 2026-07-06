@@ -45,6 +45,10 @@ final class SettingsModel {
     let issuer: String
     let account: String
 
+    /// The app's fixed arming config, surfaced read-only in the Security pane (S13d). Mirrors the
+    /// values `AppRuntime`/`AuthGuard`/`TOTP` are pinned to (300s idle, ±1 drift) — display, not edit.
+    let armingConfig: ArmingConfigPresentation
+
     private let store: SecretStore
     private let configStore: ConfigStore
     private let loginItem: LoginItemControlling
@@ -53,12 +57,15 @@ final class SettingsModel {
          configStore: ConfigStore = UserDefaultsConfigStore(),
          loginItem: LoginItemControlling = SMAppServiceLoginItem(),
          issuer: String = "RelayBack",
-         account: String = "mac") {
+         account: String = "mac",
+         idleTimeout: TimeInterval = 300,
+         driftSteps: Int = 1) {
         self.store = store
         self.configStore = configStore
         self.loginItem = loginItem
         self.issuer = issuer
         self.account = account
+        self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
         self.allowlist = AllowlistDraft(configStore.allowlist())
         self.botToken = (try? store.botToken()) ?? ""
         self.totpSecret = (try? store.totpSecret()) ?? nil
