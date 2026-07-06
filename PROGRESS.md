@@ -5,6 +5,20 @@
 
 ## Current state
 
+- **Seed allowlist expanded (post-S13c, commit `8bce16e`).** `ActionRegistry.seed` grew from the
+  3 original read-only diagnostics to **10**: added `/ip` (`/sbin/ifconfig`), `/mem`
+  (`/usr/bin/vm_stat`), `/top` (`/usr/bin/top -l 1 -n 15 -o cpu`), `/ps` (`/bin/ps aux`),
+  `/netstat` (`/usr/sbin/netstat -rn`), `/battery` (`/usr/bin/pmset -g batt`), `/date`
+  (`/bin/date`). All are absolute paths + fixed arg arrays with **no operator input (I1)** and
+  auto-advertise via `AppRuntime.botCommands()`. TDD: extended `ActionRegistryTests` +
+  `MenuBarModelTests`. (This commit was cherry-picked/merged with a PROGRESS.md conflict resolved
+  against it, so it was never logged here until this sync.)
+- **S15–S19 planned (docs only, NOT implemented — commit `d481271`).** SPEC (§2, §4/I1, new §4a,
+  §10) and PLAN were amended to scope **parameterized dev-workflow actions**: validated argv (never
+  shell — I1 unchanged), a named-repo working-dir allowlist, upstream-only remotes, and fixed
+  per-repo build config. Five new slices are drafted in PLAN — **S15** parameterized-action
+  foundation, **S16** repo config + `/cd`/`/pwd`/`/repos`, **S17** git commands, **S18**
+  xcodebuild, **S19** simulator run. None are started; no new bot command is matchable yet.
 - **S13c done — recent-activity color coding.** The popover's RECENT list is now structured,
   color-coded rows instead of raw audit strings. New pure type (TDD'd): `Features/MenuBar/
   RecentActivityRow` — `RecentActivityRow(from: AuditEntry)` → (`time` UTC `HH:mm`, `command`,
@@ -20,6 +34,9 @@
 - ✅ **S13c verified green on macOS** (this session): full `RelayBackTests` suite = **167 tests /
   24 suites** passing (added `RecentActivityRowTests` (9); `MenuBarAuditSinkTests` adapted to the
   row API). App builds clean; the disarmed Preview renders the color-coded RECENT list.
+- ✅ **Suite re-verified green after the seed expansion** (2026-07-06 sync): full `RelayBackTests`
+  suite = **169 tests / 24 suites** passing (+2 vs S13c, from the expanded `ActionRegistryTests` /
+  `MenuBarModelTests` in `8bce16e`). `** TEST SUCCEEDED **`.
 - **S14 done — persistent connection-lifecycle logging.** The poll loop now keeps a persistent,
   append-only record of transport health at `~/Library/Application Support/RelayBack/connection.log`,
   separate from the command audit log (FR-8 = received commands only). New pure types (TDD'd):
@@ -177,8 +194,17 @@
 | S13e | · Allowlist pane + General pane                  | ☐ not started |
 | S13f | · Audit pane + Connection pane                   | ☐ not started |
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
+| —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
+| S15  | Parameterized-action foundation *(dev-workflow epic)* | ☐ not started |
+| S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ☐ not started |
+| S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ☐ not started |
+| S18  | xcodebuild (`/build`) | ☐ not started |
+| S19  | Simulator run (`/sim`) | ☐ not started |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
+
+_Two open tracks remain: the **S13d–S13f** design-conformance sub-slices (Settings panes) and the
+**S15–S19** dev-workflow epic. Neither is started; pick one per session._
 
 ## Decisions & deviations
 
@@ -564,8 +590,9 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
   ergonomics; it's a fixed-name lookup, not a shell, so leniency is safe.
 - 2026-07-01 — S2: **Control commands are absent from the registry, not special-cased.**
   `/arm` `/disarm` `/status` simply aren't in `seed`, so `match` returns nil for them; AuthGuard
-  (S3) owns them. Seed set = `/uptime`→`/usr/bin/uptime`, `/disk`→`/bin/df -h`,
-  `/whoami`→`/usr/bin/whoami`, all read-only, 10s timeout.
+  (S3) owns them. Original seed set = `/uptime`→`/usr/bin/uptime`, `/disk`→`/bin/df -h`,
+  `/whoami`→`/usr/bin/whoami`, all read-only, 10s timeout. **Expanded 2026-07-03 (`8bce16e`) to 10**
+  — see the current-state note and the 2026-07-03 log entry; still all read-only, fixed argv (I1).
 - 2026-07-01 — S1: `TOTP` API landed as `code(secret: Data, at: Date)` +
   `validate(_:secret:at:driftSteps:)` with a separate `Base32.decode(_:) -> Data?`. PLAN
   phrased the secret param loosely; splitting base32 decode into its own pure type keeps the
@@ -574,6 +601,27 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
 ## Log
 
 _(Append newest first: date — slice — what got done, what's next, snags.)_
+
+- 2026-07-06 — PROGRESS sync (no code change). Reconciled this log against `main` after two commits
+  had landed past the last-logged slice (S13c): the seed-allowlist expansion (`8bce16e`) and the
+  S15–S19 dev-workflow SPEC/PLAN amendment (`d481271`), neither of which was recorded here (the
+  former merged with its PROGRESS.md conflict resolved against it). Added current-state notes, S15–S19
+  + seed-expansion rows to the slice table, and corrected the stale S2 note. Re-ran the suite on
+  macOS: **169 tests / 24 suites green** (`** TEST SUCCEEDED **`). **Two open tracks:** S13d–S13f
+  (Settings design panes) and S15–S19 (dev-workflow actions) — both not started.
+
+- 2026-07-03 — SPEC/PLAN amendment (`d481271`, docs only): scoped **S15–S19 dev-workflow actions**
+  with validated parameters + a named-repo allowlist. SPEC gained §4a (validators, upstream-only
+  remotes, fixed per-repo build config, threat-model note) and updated §2/§4-I1/§10; PLAN gained the
+  S15→S19 plan (foundation → repo config + `/cd` → git → xcodebuild → sim). **I1 "no shell, ever" is
+  unchanged** — parameters are validated argv landing at fixed indices, never a shell. Nothing
+  implemented yet; no new bot command is matchable.
+
+- 2026-07-03 — Seed allowlist expanded (`8bce16e`, amends S2). Added `/ip`, `/mem`, `/top`, `/ps`,
+  `/netstat`, `/battery`, `/date` to `ActionRegistry.seed` (now 10 read-only diagnostics) — all fixed
+  absolute paths + fixed arg arrays, no operator input (I1); they auto-advertise via
+  `AppRuntime.botCommands()`. TDD: extended `ActionRegistryTests` + `MenuBarModelTests`, suite green.
+  (Committed against an S14-era base — "green (160)" in its message; on top of S13c the suite is 169.)
 
 - 2026-07-05 — S13c complete. Recent-activity color coding. Pure/TDD:
   `Features/MenuBar/RecentActivityRow.swift` (`RecentActivityRow(from: AuditEntry)` →
