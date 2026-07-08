@@ -79,6 +79,15 @@ struct TelegramClient: TelegramTransport {
         _ = try await perform(jsonRequest(method: "setMyCommands", body: Params(commands: commands)))
     }
 
+    func getMe() async throws -> TelegramBotInfo {
+        struct Envelope: Decodable { let result: TelegramBotInfo }
+        // getMe takes no params; a bodyless POST is accepted by the Bot API.
+        var request = URLRequest(url: url(for: "getMe"))
+        request.httpMethod = "POST"
+        let data = try await perform(request)
+        return try JSONDecoder().decode(Envelope.self, from: data).result
+    }
+
     func sendDocument(chatId: Int64, filename: String, data: Data) async throws {
         _ = try await perform(multipartRequest(chatId: chatId, filename: filename, fileData: data))
     }

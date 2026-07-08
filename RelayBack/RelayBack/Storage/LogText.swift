@@ -17,6 +17,12 @@ enum LogText {
         formatter.string(from: date)
     }
 
+    /// The inverse of `timestamp` — parses a `<ISO8601-UTC>` field back to a `Date` (nil if it
+    /// doesn't match). Used by the audit-log read side (S13f) to rebuild entries from stored lines.
+    static func date(_ string: String) -> Date? {
+        formatter.date(from: string)
+    }
+
     /// Neutralizes characters that would break the one-line-per-entry guarantee or a quoted field:
     /// newlines/CR/tab collapse to a space, and inner double quotes become single quotes.
     static func sanitized(_ text: String) -> String {

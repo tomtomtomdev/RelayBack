@@ -39,6 +39,12 @@ struct TelegramChat: Decodable, Equatable {
     let id: Int64
 }
 
+/// The `getMe` result — only the bot's `@username` is consumed, to show the live connection state
+/// (S13f). A separate type from `TelegramUser` so the identity gate (`from.id`) stays untouched.
+struct TelegramBotInfo: Decodable, Equatable {
+    let username: String?
+}
+
 extension TelegramUpdate {
     /// The `getUpdates` envelope: `{ "ok": true, "result": [ <update>, … ] }`.
     private struct Batch: Decodable {

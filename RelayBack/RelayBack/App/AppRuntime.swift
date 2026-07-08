@@ -39,7 +39,8 @@ final class AppRuntime {
         self.store = store
         self.configStore = configStore
         self.idleTimeout = idleTimeout
-        self.settings = SettingsModel(store: store, configStore: configStore)
+        self.settings = SettingsModel(store: store, configStore: configStore,
+                                      auditReader: FileAuditReader(fileURL: Self.auditLogURL()))
 
         // S12: an allowlist edit in Settings both persists (via the config store) and hot-reloads
         // into the running guard, so it takes effect immediately without restarting the agent.
@@ -55,7 +56,18 @@ final class AppRuntime {
         guard let token = try? store.botToken(), !token.isEmpty,
               let secret = try? store.totpSecret(), !secret.isEmpty,
               let client = try? TelegramClient(token: token) else {
+            // Unconfigured: nothing to poll. Reflect that in the Connection pane (S13f).
+            settings.connectionState = .error(reason: "no bot token configured")
             return
+        }
+
+        // S13f: identify the bot to show the live connection state + `@username`. Secret-free:
+        // a failure is reduced to a type/code-only reason by `ConnectionState.probe` (I3).
+        settings.connectionState = .connecting
+        Task { [weak self] in
+            let state = await ConnectionState.probe(client)
+            self?.settings.connectionState = state
+            if case let .connected(username) = state { self?.menuBar.botUsername = username }
         }
 
         let clock = SystemClock()

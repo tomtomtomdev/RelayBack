@@ -30,6 +30,11 @@ final class FakeTelegramTransport: TelegramTransport {
     private(set) var sentDocuments: [(chatId: Int64, filename: String, data: Data)] = []
     private(set) var registeredCommands: [BotCommand] = []
 
+    /// The `getMe` answer: the bot username to report, or `getMeError` to throw instead (S13f
+    /// connection-state probe). Defaults to a benign username.
+    var botUsername: String? = "relayback_bot"
+    var getMeError: Error?
+
     func getUpdates(offset: Int64) async throws -> [TelegramUpdate] {
         getUpdatesOffsets.append(offset)
         let index = getUpdatesOffsets.count - 1
@@ -56,5 +61,10 @@ final class FakeTelegramTransport: TelegramTransport {
 
     func setMyCommands(_ commands: [BotCommand]) async throws {
         registeredCommands = commands
+    }
+
+    func getMe() async throws -> TelegramBotInfo {
+        if let getMeError { throw getMeError }
+        return TelegramBotInfo(username: botUsername)
     }
 }

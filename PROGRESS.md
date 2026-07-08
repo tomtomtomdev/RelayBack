@@ -5,6 +5,31 @@
 
 ## Current state
 
+- **S13f done — Audit pane + Connection pane. S13 design-conformance epic COMPLETE.** The **Audit**
+  pane is now the handoff's append-only table: a column header (Time · from.id · Action / decision ·
+  Exit), zebra-striped mono rows tinted by decision, and the "Append-only · no secrets, no full
+  output stored." caption. The **Connection** pane gained a live status card (colored dot + label +
+  detail) above the bot-token field. New pieces:
+  - **Read side of the audit log** (the S9 `AuditSink` was write-only): `Storage/AuditReading`
+    protocol + `AuditEntry.parse(line:)` (pure inverse of `.line`, TDD'd round-trip, nil on
+    malformed) + thin real `Storage/FileAuditReader` (bounded tail, smoke-tested) + fake
+    `InMemoryAuditReader`. Pure `Features/Settings/AuditRowPresentation` maps an entry → columns +
+    severity/role (`.command` blue / `.control` green / `.rejected` amber|red), newest-first with
+    stable ids. **I3 holds by construction:** the line format has no output/secret field, so a
+    *parsed* entry structurally can't carry one (asserted).
+  - **Connection state**: pure `Features/Settings/ConnectionState` (`.connecting |
+    .connected(botUsername:) | .error(reason:)`) + `ConnectionStatePresentation` (label/detail/style)
+    + `ConnectionState.probe(_:)` which calls a new **`TelegramTransport.getMe`** and reduces any
+    failure via `ConnectionReason.from` (type/code only — the token-bearing URL never leaks, I3).
+    `getMe` returns a new `TelegramBotInfo` (username only), decoded thinly in `TelegramClient`.
+  - **Wiring**: `SettingsModel` gained `connectionState` + injected `auditReader` + `refreshAuditRows`.
+    `AppRuntime` injects `FileAuditReader`, probes the bot once at `start()` (→ `settings.connectionState`
+    and `menuBar.botUsername`, the popover's `@bot` — nil until now), and sets `.error("no bot token
+    configured")` when unconfigured. `SettingsView` gained an `initialPane` param for pane-targeted
+    Previews. **No core/security change** to the run path.
+- ✅ **S13f verified green on macOS** (this session): full `RelayBackTests` suite = **202 tests /
+  30 suites** passing (added `AuditRowPresentationTests` (7) + `AuditReaderTests` (8) +
+  `ConnectionStateTests` (5)). App builds clean; the Audit / Connection Previews render the new panes.
 - **S13e done — Allowlist pane + General pane styled to the handoff.** The **Allowlist** pane is now
   the handoff's member list: per-member cards with a gradient avatar (initial + color derived from
   the id), the mono `id <n>`, a cosmetic green **`primary`** badge on the lowest id, and a **Remove**
@@ -178,20 +203,12 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S13f** — Audit + Connection panes. This is the last design-conformance sub-slice
-  and it needs new seams (build them behind protocols with fakes, TDD-first): (1) an **`AuditReading`**
-  read side for the audit log (current `AuditSink` is write-only) — TDD a pure `AuditRowPresentation`
-  (columns Time · from.id · Action/decision · Exit + severity, **secret/output-free — assert I3**)
-  against a fake reader; keep the real bounded-tail file read thin + smoke-tested. (2) A view-model
-  connection state `.connecting | .connected(botUsername:) | .error` + a pure `connectionState →
-  (label, style)` mapping — **decide** whether to add `TelegramTransport.getMe` (fake it) or show a
-  generic connected state without the username; record the choice. v1 *logic* DoD is
-  met, but the remaining SwiftUI surfaces don't yet match the high-fidelity design handoff
-  (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
-  in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
-  view-model extensions tested; thin views Preview-verified), without touching the verified core or
-  weakening any SPEC §4 invariant. Do one sub-slice per session. Other optional follow-ups: per-second
-  live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; SPEC §10 future-phase items.
+- **Next slice:** **S15** — Parameterized-action foundation (start of the S15–S19 dev-workflow epic).
+  With **S13 complete**, all six handoff surfaces are native and v1 is both logic- and design-DoD
+  met. S15 introduces validated-argv parameterized actions (never shell — I1 unchanged) behind
+  protocols with fakes, TDD-first; see PLAN S15 for the seam list. Other optional follow-ups (not
+  blocking any epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke;
+  a live per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -216,13 +233,13 @@
 | S10 | Menu bar + Settings UI       | ✅ done |
 | S11 | Lifecycle & login item       | ✅ done |
 | S12 | Allowlist persistence & auth wiring *(new)* | ✅ done |
-| S13  | Design conformance — recreate handoff in SwiftUI *(new epic)* | ◐ in progress |
+| S13  | Design conformance — recreate handoff in SwiftUI *(new epic)* | ✅ done |
 | S13a | · App icon + popover shell (disarmed)            | ✅ done |
 | S13b | · Popover armed content (actions/result/disarm)  | ✅ done |
 | S13c | · Recent-activity color coding                   | ✅ done |
 | S13d | · Settings sidebar shell + Security pane         | ✅ done |
 | S13e | · Allowlist pane + General pane                  | ✅ done |
-| S13f | · Audit pane + Connection pane                   | ☐ not started |
+| S13f | · Audit pane + Connection pane                   | ✅ done |
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
 | —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
 | S15  | Parameterized-action foundation *(dev-workflow epic)* | ☐ not started |
@@ -233,13 +250,43 @@
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
-_Two open tracks remain: the final **S13f** design-conformance sub-slice (Audit + Connection panes)
-and the **S15–S19** dev-workflow epic. Pick one per session._
+_The **S13** design-conformance epic (S13a–S13f) is complete — all six handoff surfaces are now
+native. One open track remains: the **S15–S19** dev-workflow epic (parameterized actions). Do one
+slice per session._
 
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S13f: **Chose to add `TelegramTransport.getMe` (the PLAN decision), not a generic
+  connected state.** The handoff shows `@relayback_bot`; showing it needs the bot's username. Added
+  `getMe() -> TelegramBotInfo` (username only — a separate type from `TelegramUser` so the `from.id`
+  identity gate is untouched) + a fake, and `ConnectionState.probe(_:)` that calls it and maps any
+  failure through the existing `ConnectionReason.from` (type/code only) so the token-bearing request
+  URL never reaches the UI (I3). The probe runs once at `AppRuntime.start()`; a live per-poll
+  connection indicator (the S14 `connection.log` already records transitions) is a future refinement.
+- 2026-07-08 — S13f: **The audit READ side reconstructs entries by parsing stored lines
+  (`AuditEntry.parse`), the pure inverse of `.line`.** The pane needs `AuditEntry`s but the log
+  stores rendered lines, so `parse` round-trips the three event kinds (TDD'd; nil on malformed). I3
+  is preserved *by construction*: the line format has no output/secret field (S9), so a parsed entry
+  cannot carry one — no scrubbing needed. `FileAuditReader` stays thin (read tail → `compactMap`
+  parse) and is smoke-tested only; the format knowledge lives in the pure, tested `parse`.
+- 2026-07-08 — S13f: **Audit rows render the audit model faithfully, not the handoff's illustrative
+  labels.** A control event shows its control text (e.g. `armed`) — the audit model doesn't store the
+  originating `/arm` — and a rejection reads `rejected · <reason>` (the reason, e.g. `disarmed` /
+  `unknown user`, not the offending command, which `AuditEvent.rejected` never carries). Same
+  constraint as S13c's RECENT list. Severity buckets mirror S13c (unknown-user/nonzero-exit → danger;
+  disarmed/bad-code → warning; else normal); the middle column colors by role (command→blue,
+  control→green, rejected→severity). The small duplication with `RecentActivityRow` (severity map +
+  `HH:mm` formatter) is left un-extracted — two independently-tested pure types, distinct columns.
+- 2026-07-08 — S13f: **Connection state lives on `SettingsModel`; the probe also feeds the popover's
+  `@bot`.** The Connection pane is in `SettingsView(model: SettingsModel)`, so `connectionState`
+  (default `.connecting`) is held there and rendered via `ConnectionStatePresentation`. `AppRuntime`
+  pushes the probe result and, on success, sets `menuBar.botUsername` (the popover's listening-row
+  `@bot`, which was `nil` "until S13f"). Unconfigured (no token) → `.error("no bot token configured")`
+  so the pane isn't stuck "Connecting…". `SettingsView` gained an `initialPane:` param so Previews can
+  target the Audit/Connection panes; the connection status dot is a plain `Circle` (the popover's
+  `PulsingDot` is file-private) — a cosmetic, non-functional deviation.
 - 2026-07-08 — S13e: **Allowlist stays ids-only (option (a)) — labels/avatars/`primary` are derived,
   not stored.** The handoff shows per-member names, colored avatars, and a `primary` badge, but the
   persisted `ConfigStore`/`AllowlistDraft` keep a bare `[Int64]`. Rather than widen the data model

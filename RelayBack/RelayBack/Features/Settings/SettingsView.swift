@@ -24,7 +24,12 @@ import CoreImage.CIFilterBuiltins
 
 struct SettingsView: View {
     @Bindable var model: SettingsModel
-    @State private var selection: SettingsPane = .security
+    @State private var selection: SettingsPane
+
+    init(model: SettingsModel, initialPane: SettingsPane = .security) {
+        self.model = model
+        _selection = State(initialValue: initialPane)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -84,7 +89,7 @@ struct SettingsView: View {
         case .connection: connectionPane
         case .allowlist:  allowlistPane
         case .security:   securityPane
-        case .audit:      placeholderPane("Audit log", detail: "Coming in S13f.")
+        case .audit:      auditPane
         case .general:    generalPane
         }
     }
@@ -215,22 +220,48 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Connection pane (bot token — restyled fully in S13f)
+    // MARK: - Connection pane (S13f — live status + bot token)
 
     private var connectionPane: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             paneHeader("Connection", detail: "The private Telegram bot token this agent polls with.")
-            SecureField("123456:ABC-DEF…", text: $model.botToken)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 360)
-            Button("Save token") { model.saveToken() }
-                .buttonStyle(PrimaryButtonStyle())
+            connectionStatusCard
+            VStack(alignment: .leading, spacing: 8) {
+                Text("BOT TOKEN")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x6B7280))
+                    .kerning(0.5)
+                SecureField("123456:ABC-DEF…", text: $model.botToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 360)
+                Button("Save token") { model.saveToken() }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
             if let error = model.lastError {
                 Text(error).font(.caption).foregroundStyle(Theme.danger)
             }
             Spacer()
         }
         .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+    }
+
+    private var connectionStatusCard: some View {
+        let status = ConnectionStatePresentation(model.connectionState)
+        return HStack(spacing: 11) {
+            Circle().fill(status.style.color).frame(width: 9, height: 9)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.label)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(status.detail)
+                    .font(.system(size: 12, design: status.style == .connected ? .monospaced : .default))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
     }
 
     // MARK: - Allowlist pane (S13e)
@@ -343,6 +374,85 @@ struct SettingsView: View {
         .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
     }
 
+    // MARK: - Audit pane (S13f)
+
+    private var auditPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            paneHeader("Audit log", detail: "Append-only record of every received command.")
+                .padding(.bottom, 14)
+
+            auditColumnHeader
+
+            if model.auditRows.isEmpty {
+                Text("No activity yet.")
+                    .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 14)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(model.auditRows) { row in
+                            auditRowView(row)
+                        }
+                    }
+                }
+            }
+
+            Text("Append-only · no secrets, no full output stored.")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.textTertiary)
+                .padding(.top, 12)
+            Spacer(minLength: 0)
+        }
+        .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+        .onAppear { model.refreshAuditRows() }
+    }
+
+    private var auditColumnHeader: some View {
+        HStack(spacing: 0) {
+            Text("Time").frame(width: 56, alignment: .leading)
+            Text("from.id").frame(width: 104, alignment: .leading)
+            Text("Action / decision").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Exit").frame(width: 48, alignment: .trailing)
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .kerning(0.5)
+        .textCase(.uppercase)
+        .foregroundStyle(Theme.textTertiary)
+        .padding(.bottom, 8)
+    }
+
+    private func auditRowView(_ row: AuditRowPresentation) -> some View {
+        HStack(spacing: 0) {
+            Text(row.time)
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 56, alignment: .leading)
+            Text(row.fromIdText)
+                .foregroundStyle(row.fromIdColor)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(width: 104, alignment: .leading)
+            Text(row.action)
+                .foregroundStyle(row.actionColor)
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.exitText)
+                .fontWeight(row.exitIsSuccess == nil ? .regular : .semibold)
+                .foregroundStyle(row.exitColor)
+                .frame(width: 48, alignment: .trailing)
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background(rowBackground(for: row))
+    }
+
+    /// Zebra striping (odd rows tinted) with a severity tint overlaid for warnings/dangers.
+    private func rowBackground(for row: AuditRowPresentation) -> some View {
+        let zebra = row.id.isMultiple(of: 2) ? Color.clear : Color.black.opacity(0.025)
+        return ZStack {
+            zebra
+            row.rowTint
+        }
+    }
+
     // MARK: - Shared bits
 
     private func paneHeader(_ title: String, detail: String) -> some View {
@@ -422,6 +532,25 @@ private struct SecondaryButtonStyle: ButtonStyle {
     SettingsView(model: SettingsModel(store: PreviewSecretStore()))
 }
 
+#Preview("Audit") {
+    let model = SettingsModel(store: PreviewSecretStore(),
+                              auditReader: PreviewAuditReader())
+    model.refreshAuditRows()
+    return SettingsView(model: model, initialPane: .audit)
+}
+
+#Preview("Connection — connected") {
+    let model = SettingsModel(store: PreviewSecretStore())
+    model.connectionState = .connected(botUsername: "relayback_bot")
+    return SettingsView(model: model, initialPane: .connection)
+}
+
+#Preview("Connection — error") {
+    let model = SettingsModel(store: PreviewSecretStore())
+    model.connectionState = .error(reason: "network error -1009")
+    return SettingsView(model: model, initialPane: .connection)
+}
+
 /// A throwaway in-memory `SecretStore` so the Settings previews render without the Keychain.
 private final class PreviewSecretStore: SecretStore {
     private var token: String?
@@ -439,4 +568,18 @@ private final class PreviewConfigStore: ConfigStore {
     init(allowlist: [Int64] = []) { ids = allowlist }
     func allowlist() -> [Int64] { ids }
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
+}
+
+/// A throwaway `AuditReading` so the Audit-pane preview renders a representative, color-coded table.
+private struct PreviewAuditReader: AuditReading {
+    func recentEntries(limit: Int) -> [AuditEntry] {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        return [
+            AuditEntry(timestamp: now, fromId: 481920774, event: .control("armed")),
+            AuditEntry(timestamp: now, fromId: 481920774, event: .actionRan(command: "/uptime", exitCode: 0)),
+            AuditEntry(timestamp: now, fromId: 481920774, event: .actionRan(command: "/disk", exitCode: 1)),
+            AuditEntry(timestamp: now, fromId: 481920774, event: .rejected(reason: "disarmed")),
+            AuditEntry(timestamp: now, fromId: 995510, event: .rejected(reason: "unknown user")),
+        ].suffix(limit)
+    }
 }

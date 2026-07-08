@@ -60,3 +60,62 @@ struct AuditEntry: Equatable {
 protocol AuditSink {
     func append(_ entry: AuditEntry)
 }
+
+// MARK: - Read side (S13f)
+
+/// The read side of the audit log, so the Settings Audit pane can render past history (the
+/// `AuditSink` above is write-only). `FileAuditReader` is the real backing; a fake serves tests.
+/// Non-throwing and best-effort — a missing/unreadable log reads back as no entries.
+protocol AuditReading {
+    /// The most recent `limit` entries, in file order (oldest → newest).
+    func recentEntries(limit: Int) -> [AuditEntry]
+}
+
+extension AuditEntry {
+    /// The pure inverse of `line`: reconstructs an entry from a stored audit line so the read side
+    /// can rebuild history. Returns nil for a line that doesn't match the format (rather than
+    /// trapping). Because the line has no output/secret field (I3, S9), a parsed entry cannot carry
+    /// one either. Free text was sanitized on write, so the quoted fields never contain a newline.
+    static func parse(line: String) -> AuditEntry? {
+        // Format: `<ISO8601-UTC> from=<id> <detail>`
+        let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let timestamp = LogText.date(String(parts[0])),
+              parts[1].hasPrefix("from="),
+              let fromId = Int64(parts[1].dropFirst("from=".count)) else {
+            return nil
+        }
+
+        guard let event = parseEvent(String(parts[2])) else { return nil }
+        return AuditEntry(timestamp: timestamp, fromId: fromId, event: event)
+    }
+
+    private static func parseEvent(_ detail: String) -> AuditEvent? {
+        if detail.hasPrefix("action=") {
+            // `action=<command> exit=<n>`
+            let rest = detail.dropFirst("action=".count)
+            guard let space = rest.lastIndex(of: " ") else { return nil }
+            let command = String(rest[..<space])
+            let exitField = rest[rest.index(after: space)...]
+            guard exitField.hasPrefix("exit="),
+                  let code = Int32(exitField.dropFirst("exit=".count)) else { return nil }
+            return .actionRan(command: command, exitCode: code)
+        }
+        if let text = quotedValue(in: detail, key: "control") {
+            return .control(text)
+        }
+        if let reason = quotedValue(in: detail, key: "rejected") {
+            return .rejected(reason: reason)
+        }
+        return nil
+    }
+
+    /// Extracts `<value>` from a `key="<value>"` detail. Sanitizing on write guarantees the value
+    /// contains no embedded double quote, so the trailing `"` is unambiguous.
+    private static func quotedValue(in detail: String, key: String) -> String? {
+        let prefix = #"\#(key)=""#
+        guard detail.hasPrefix(prefix), detail.hasSuffix("\"") else { return nil }
+        let inner = detail.dropFirst(prefix.count).dropLast()
+        return String(inner)
+    }
+}

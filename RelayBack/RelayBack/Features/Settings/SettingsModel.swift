@@ -42,6 +42,11 @@ final class SettingsModel {
     /// the running `AuthGuard` (S12). Not set in tests that only assert persistence.
     var onAllowlistChanged: (([Int64]) -> Void)?
 
+    /// Live transport reachability shown in the Connection pane (S13f). The composition root
+    /// (`AppRuntime`) probes the bot at startup and pushes the result here; the pane renders it via
+    /// `ConnectionStatePresentation`. Starts `.connecting` until the first probe resolves.
+    var connectionState: ConnectionState = .connecting
+
     let issuer: String
     let account: String
 
@@ -49,13 +54,19 @@ final class SettingsModel {
     /// values `AppRuntime`/`AuthGuard`/`TOTP` are pinned to (300s idle, ±1 drift) — display, not edit.
     let armingConfig: ArmingConfigPresentation
 
+    /// Newest-first, color-coded rows for the Settings Audit pane (S13f). Refreshed on demand from
+    /// the injected `AuditReading`; empty until `refreshAuditRows()` runs (or when no reader is set).
+    private(set) var auditRows: [AuditRowPresentation] = []
+
     private let store: SecretStore
     private let configStore: ConfigStore
     private let loginItem: LoginItemControlling
+    private let auditReader: AuditReading?
 
     init(store: SecretStore,
          configStore: ConfigStore = UserDefaultsConfigStore(),
          loginItem: LoginItemControlling = SMAppServiceLoginItem(),
+         auditReader: AuditReading? = nil,
          issuer: String = "RelayBack",
          account: String = "mac",
          idleTimeout: TimeInterval = 300,
@@ -63,6 +74,7 @@ final class SettingsModel {
         self.store = store
         self.configStore = configStore
         self.loginItem = loginItem
+        self.auditReader = auditReader
         self.issuer = issuer
         self.account = account
         self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
@@ -85,6 +97,15 @@ final class SettingsModel {
             launchAtLogin = loginItem.isEnabled
             lastError = "Could not update launch-at-login."
         }
+    }
+
+    // MARK: - Audit log (read side, S13f)
+
+    /// Reloads the Audit pane's rows from the log (newest-first). Best-effort: with no reader or an
+    /// unreadable log it leaves an empty table. Call when the pane appears so it shows fresh history.
+    func refreshAuditRows(limit: Int = 200) {
+        let entries = auditReader?.recentEntries(limit: limit) ?? []
+        auditRows = AuditRowPresentation.rows(from: entries)
     }
 
     // MARK: - Bot token

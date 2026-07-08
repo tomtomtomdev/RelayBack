@@ -34,4 +34,8 @@ protocol TelegramTransport {
 
     /// Register the allowlisted action commands so they autocomplete in chat.
     func setMyCommands(_ commands: [BotCommand]) async throws
+
+    /// Identify the bot behind the token — used to show the live connection state / `@username`
+    /// (S13f). A successful call also confirms the transport can reach Telegram.
+    func getMe() async throws -> TelegramBotInfo
 }

@@ -110,6 +110,58 @@ extension RecentActivityRow.Severity {
     }
 }
 
+extension AuditRowPresentation {
+    /// The translucent row-background tint for this entry's severity (S13f): amber for a
+    /// disarmed/failed-arm block, red for an unauthorized sender or a failed run, none otherwise.
+    var rowTint: Color {
+        switch severity {
+        case .normal: return .clear
+        case .warning: return Theme.warning.opacity(0.08)
+        case .danger: return Theme.danger.opacity(0.07)
+        }
+    }
+
+    /// The color of the middle "Action / decision" column: a command is accent blue, a control
+    /// event green, a rejection follows its severity.
+    var actionColor: Color {
+        switch actionRole {
+        case .command: return Theme.accent
+        case .control: return Theme.armedGreenText
+        case .rejected:
+            switch severity {
+            case .danger: return Theme.danger
+            case .warning: return Theme.warningText
+            case .normal: return Theme.textPrimary
+            }
+        }
+    }
+
+    /// The exit-code column color: green for 0, red for a non-zero exit, tertiary for the em-dash.
+    var exitColor: Color {
+        switch exitIsSuccess {
+        case .some(true): return Theme.armedGreenText
+        case .some(false): return Theme.danger
+        case .none: return Theme.textTertiary
+        }
+    }
+
+    /// The `from.id` column color — red when the sender is the security-relevant part (danger).
+    var fromIdColor: Color {
+        severity == .danger ? Theme.danger : Theme.textPrimary
+    }
+}
+
+extension ConnectionStatePresentation.Style {
+    /// The status dot / accent color for this connection style (S13f).
+    var color: Color {
+        switch self {
+        case .connecting: return Theme.warning
+        case .connected: return Theme.armedGreen
+        case .error: return Theme.danger
+        }
+    }
+}
+
 extension Color {
     /// Builds a `Color` from a 24-bit `0xRRGGBB` literal — keeps the token table above readable.
     init(hex: UInt32, opacity: Double = 1) {
