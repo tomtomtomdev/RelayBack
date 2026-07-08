@@ -109,6 +109,14 @@ Some actions (git, xcodebuild) need a parameter or a repo context. These extend 
   no remote name or refspec is ever accepted from chat.
 - **Builds use fixed per-repo config.** `xcodebuild` scheme + destination come from the repo's
   config entry, not from operator text — zero build-arg injection surface.
+- **Simulator run is a fixed multi-step sequence (S19).** `/sim` resolves to an ordered
+  `xcodebuild build → xcrun simctl boot → open -a Simulator` sequence built entirely from the
+  active repo's config (scheme, destination, `simulatorDevice`) — never operator text, never argv
+  the operator can influence. Steps run in order and stop on the first non-zero exit; `/sim` takes
+  no operator argument, and a repo missing any required field is refused (nothing spawns). *(v1
+  scope: `/sim` builds and boots the configured device; it does not `simctl install`/`launch` the
+  built app, which would need a bundle-id + product-path the v1 repo config does not model —
+  deferred to a future phase.)*
 
 Threat-model note: this widens the worst-case-on-full-auth-bypass from *read-only diagnostics*
 to *mutating git state and triggering builds in the configured repos*. It does **not** grant a
@@ -129,6 +137,13 @@ Control commands (handled internally, always available to allowlisted users):
 Action commands: each registry `Action` exposes a `command` (e.g. `/uptime`). Sending it,
 while armed and authorized, runs the action. Registered via Telegram `setMyCommands` so
 they autocomplete in chat. Unknown commands → polite "unknown command" reply, logged.
+
+Dev-workflow commands (§4a, run in the active repo; require `/cd` first):
+- `/gitstatus` · `/branch` · `/checkout <branch>` · `/pull` · `/push` · `/commit <msg>` — git
+  operations with validated argv (S17). `push`/`pull` are upstream-only and take no argument.
+- `/build` — `xcodebuild build` with the repo's configured scheme + destination; no argument (S18).
+- `/sim` — build → boot the configured simulator device → reveal Simulator.app; no argument,
+  stops on the first failing step (S19).
 
 ## 6. Functional requirements
 

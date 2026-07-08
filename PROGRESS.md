@@ -5,6 +5,56 @@
 
 ## Current state
 
+- **S19 done — Simulator run (`/sim`) wired. The S15–S19 dev-workflow epic is COMPLETE.** `/sim` is the
+  first **multi-step** command: it resolves to an ordered *sequence* of processes built entirely from
+  the active repo's `RepoConfig`, and the coordinator runs them in order, stopping on the first
+  non-zero exit. New pieces:
+  - **Pure `Core/SimulatorCommand`** — `SimulatorCommand.steps(for: RepoConfig)` builds the ordered
+    `[Action]`: **(1)** `/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination> build`
+    (1800s), **(2)** `/usr/bin/xcrun simctl boot <cfg.simulatorDevice>` (120s), **(3)** `/usr/bin/open
+    -a Simulator` (120s) — every step tagged `/sim`, run in the repo root. Returns
+    `SimulatorResolution.ok([Action]) | .invalid(reason:)`; a repo missing scheme/destination/device is
+    refused (fails closed, §4a). `SimulatorCommandSpec` (command + description) is the injected
+    matching/advertising value; `SimulatorCommand.spec` is the canonical `/sim` instance.
+  - **`Decision.runActionSequence([Action])`** — a new decision case carrying the config-built step
+    list (never operator text, I1). **`AuthGuard` routes `/sim`** via an injected `simulatorCommand:
+    SimulatorCommandSpec? = nil` (nil = not matchable, default → every existing test/call site
+    unchanged; `AppRuntime` injects `SimulatorCommand.spec`). `resolveSimulator` applies the same gate
+    order as a repo-scoped parameterized command: **arm (I2) → active-repo precondition (`select a repo
+    first`) → no-operator-arg (`unexpected extra input`) → build**; a bad/missing-config repo →
+    `.invalidParameters(reason)`, nothing spawns.
+  - **`AppCoordinator.runSequence`** — runs each step through a shared **`runStep`** (extracted from the
+    old single-action `run`, which now delegates to it), so every step is formatted, delivered, and
+    audited exactly like a single action (I3: token + exit code only). Breaks the loop on the first
+    non-zero exit — a failed build never proceeds to boot/reveal.
+  - **`AppRuntime` wiring** — `simulatorCommand: SimulatorCommand.spec` into the guard; `botCommands()`
+    advertises `/sim` via `setMyCommands`. I1/I4 unchanged: three fixed absolute executables + fixed
+    argv words + config-sourced values (scheme/destination/device), spawned as the normal user under
+    the restricted PATH.
+  - **Deviations from PLAN (both documented in decisions + SPEC §4a):** (a) `/sim` is **build → boot →
+    reveal**, not the literal `boot → install → launch` — `simctl install`/`launch` need a bundle-id +
+    built-product-path the v1 `RepoConfig` doesn't model; deferred to a future phase (user-confirmed
+    scope this session). (b) The multi-step wrinkle is solved with a **dedicated builder +
+    `runActionSequence`**, *not* a `.simulatorDevice` `RepoConfigArg` case — the S18 `configArgs` are
+    emitted *before* `fixedArgs`, which can't express `simctl boot <device>` (value trails the verb),
+    and closures/multi-Action don't fit `ParameterizedCommand`'s single-spawn `Equatable` shape.
+- ✅ **S19 verified green on macOS** (this session): full `RelayBackTests` suite = **286 tests /
+  36 suites** passing (added `SimulatorCommandTests` (6) — spec token, build→boot→reveal argv from
+  config, every-step-in-repo-root/I1, and the missing scheme/destination/device rejections; +
+  `AuthGuardTests` (6) — `/sim` not matchable when unconfigured, runs the sequence in the active repo,
+  requires an active repo, rejects a repo with no device, takes no operator arg, requires an armed
+  session; + `AppCoordinatorTests` (2) — runs every step in order & audits each, and stops on the first
+  non-zero exit with no output in the audit (I3)). App builds clean, no warnings. **No real simulator
+  runs in CI** (argv sequence + guard only, per PLAN); manual verification steps recorded below.
+- **`/sim` manual verification (macOS-manual, not in CI):** (1) In **Settings → Repos**, add a repo
+  whose `root` is an iOS-app checkout, `scheme` = its app scheme, `destination` =
+  `platform=iOS Simulator,name=<device>`, `simulatorDevice` = `<device>` (e.g. `iPhone 15`). (2) From
+  Telegram: `/arm <code>` → `/cd <repo>` → `/sim`. (3) Expect three replies in order: the `xcodebuild`
+  build output, then `xcrun simctl boot` (silent on success / "already booted"), then `open -a
+  Simulator` — Simulator.app opens showing the booted device. (4) Force a build failure (e.g. a syntax
+  error) and re-run `/sim`: the sequence must stop after step 1 — no boot, no reveal — and the operator
+  sees only the build failure. (5) `/cd` a repo with no `simulatorDevice` → `/sim` replies
+  `⚠️ no simulator device configured for this repo`, nothing spawns.
 - **S18 done — `xcodebuild` wired (`/build`).** The dev-workflow epic's build command is live. Unlike
   the S17 git commands (fully fixed argv), `/build`'s `-scheme`/`-destination` values are drawn from
   the **active repo's `RepoConfig`** — never operator text, never an argv slot the operator controls.
@@ -326,18 +376,14 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S19** — Simulator run (`/sim`), the last dev-workflow slice and the most
-  involved. `/xcrun simctl` multi-step orchestration (boot → install → launch) on the active repo's
-  configured `simulatorDevice`, device drawn **only** from `RepoConfig` (like S18's scheme/destination).
-  Wrinkle vs S18: `/sim` is a *sequence* of processes, not one — the current `ParameterizedCommand`
-  models a single spawn, so S19 needs either a multi-step spec (a list of argv steps built from
-  config) or a small orchestrator that runs them in order and stops on first non-zero exit. Reuse the
-  S18 `configArgs` mechanism for the device value (add a `.simulatorDevice` `RepoConfigArg` case, or a
-  device-specific step builder); unknown/missing device → `.invalidParameters`; no operator arg
-  accepted. Tests assert the argv *sequence* is built from config (no real sim run in CI — macOS-manual
-  only); record the manual verification steps in PROGRESS. See PLAN S19. Other optional follow-ups (not
-  blocking the epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; a
-  live per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
+- **Next slice:** **none — all planned v1 slices (S0–S19) are complete.** No epic is open. Remaining
+  work is optional follow-ups (none blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
+  — needs a bundle-id + built-product-path added to `RepoConfig` + Settings (deferred this session,
+  SPEC §4a note); (b) per-second live menu-bar countdown (status refreshes on audit events, not a
+  timer); (c) a real-Keychain/UserDefaults launch smoke; (d) a live per-poll connection indicator
+  reading the S14 `connection.log`; (e) SPEC §10 future-phase items. Also worth doing before any real
+  use: the **manual verification passes** for `/build` (S18) and `/sim` (S19) on a real repo/simulator,
+  which have never run outside CI-inert argv/guard tests.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -375,18 +421,49 @@
 | S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ✅ done |
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ✅ done |
 | S18  | xcodebuild (`/build`) | ✅ done |
-| S19  | Simulator run (`/sim`) | ☐ not started |
+| S19  | Simulator run (`/sim`) | ✅ done |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
-_The **S13** design-conformance epic (S13a–S13f) is complete — all six handoff surfaces are now
-native. One open track remains: the **S15–S19** dev-workflow epic (parameterized actions). Do one
-slice per session._
+_The **S13** design-conformance epic (S13a–S13f) and the **S15–S19** dev-workflow epic (parameterized
+actions) are both complete. **All planned v1 slices (S0–S19) are done.** No epic is open; remaining
+items are optional follow-ups (see "Next" below)._
 
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S19: **`/sim` is build → boot → reveal, not PLAN's `boot → install → launch`.** The
+  literal `simctl install <path>` / `launch <bundle-id>` need a built-product path + app bundle-id that
+  v1's `RepoConfig` (name/root/scheme/destination/simulatorDevice) does not store. Rather than widen the
+  persisted model + Settings UI for the final slice, `/sim` uses only the config we have:
+  `xcodebuild build` → `xcrun simctl boot <device>` → `open -a Simulator`. Why: keeps the slice within
+  the existing persistence surface (no migration, no new UI), still genuinely useful (builds + brings up
+  the configured device for screen-share), and honors §4a (every value from config, never operator
+  text). Install/launch is deferred to a future phase; the scope was user-confirmed this session. SPEC
+  §4a records the deferral.
+- 2026-07-08 — S19: **The multi-step wrinkle is a dedicated `SimulatorCommand` builder +
+  `Decision.runActionSequence([Action])`, NOT a `.simulatorDevice` `RepoConfigArg`.** The S18
+  `configArgs` are emitted *before* `fixedArgs` (right for `xcodebuild -scheme X … build`), but the boot
+  step is `simctl boot <device>` — the value *trails* the fixed verb, which the before-`fixedArgs`
+  ordering can't express. And `/sim` yields *multiple* `Action`s, which `ParameterizedCommand` (single
+  spawn, `Equatable`, resolver → one `.ok(Action)`) doesn't model. So `/sim` gets its own pure builder
+  (`steps(for: RepoConfig) -> SimulatorResolution`) and a new decision case carrying the sequence,
+  leaving the git/build single-spawn path untouched. The PROGRESS S18 note anticipated exactly this
+  fork ("a device-specific step builder" over "add a `.simulatorDevice` `RepoConfigArg` case").
+- 2026-07-08 — S19: **`/sim` is injected as `SimulatorCommandSpec?` (nil = not matchable), mirroring the
+  empty-`parameterizedCommands` inertness pattern.** The guard holds an optional spec (command +
+  description) defaulting nil, so every existing `AuthGuard` init call site + test compiles unchanged and
+  `/sim` is proven not-matchable when unconfigured (test). The step *sequence* is built by the static
+  `SimulatorCommand.steps(for:)` keyed off the active repo — the injected spec carries only matching /
+  `setMyCommands` metadata (there is exactly one sim command app-wide, so the static coupling is fine).
+  Gate order matches a repo-scoped parameterized command: arm (I2) → active-repo → no-operator-arg → build.
+- 2026-07-08 — S19: **`AppCoordinator` runs a sequence via a shared `runStep`; the single-action `run`
+  now delegates to it.** Extracted `runStep(action) -> CommandResult` (spawn → format/deliver → audit →
+  last-result card) so both `.runAction` (single) and `.runActionSequence` (multi) reuse one code path;
+  `runSequence` loops it and **breaks on the first non-zero exit** so a failed build never boots/reveals.
+  Each step audits as `.actionRan(command: "/sim", exitCode:)` — token + exit only, no output (I3, tested
+  with a scripted mid-sequence failure whose stdout/stderr is asserted absent from every audit line).
 - 2026-07-08 — S18: **Config-derived argv is data-driven (`configArgs: [RepoConfigArg]`), not a
   build-spec factory.** PLAN offered two options for the S18 wrinkle (argv depends on the active repo's
   config): the resolver/guard reads `cfg.scheme`/`cfg.destination`, *or* a small build-spec factory

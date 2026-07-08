@@ -353,4 +353,57 @@ struct AppCoordinatorTests {
         await h.coordinator.handle(update(fromId: allowed, text: "/cd relayback"))
         #expect(h.audit.entries.map(\.event).contains(.control("cd relayback")))
     }
+
+    // MARK: - Multi-step /sim (S19): steps run in order, and the sequence stops on the first failure
+
+    private let simRepo = RepoConfig(name: "app", root: "/Users/op/dev/App",
+                                     scheme: "App", destination: "platform=iOS Simulator,name=iPhone 15",
+                                     simulatorDevice: "iPhone 15")
+
+    private func makeSimHarness(result: CommandResult = CommandResult(exitCode: 0, stdout: "ok", stderr: "")) -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner(result: result)
+        let audit = InMemoryAuditSink()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                                  clock: clock, idleTimeout: idleTimeout,
+                                  repoConfigs: [simRepo], simulatorCommand: SimulatorCommand.spec)
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         transport: transport, audit: audit, clock: clock)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner, audit: audit, clock: clock)
+    }
+
+    private var simSteps: [Action] {
+        guard case let .ok(steps) = SimulatorCommand.steps(for: simRepo) else { return [] }
+        return steps
+    }
+
+    @Test func simRunsEveryStepInOrderAndAuditsEach() async {
+        let h = makeSimHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/sim"))
+
+        // I1: the runner receives the config-built step sequence, in order — never operator text.
+        #expect(h.runner.runActions == simSteps)
+        // I3: each step is audited by the /sim token + its exit code only, never the output.
+        #expect(h.audit.entries.filter { $0.event == .actionRan(command: "/sim", exitCode: 0) }.count == 3)
+    }
+
+    @Test func simStopsOnFirstNonZeroExit() async {
+        let h = makeSimHarness()
+        // Step 1 (build) succeeds; step 2 (boot) fails → step 3 (reveal) must never spawn.
+        h.runner.scriptedResults = [CommandResult(exitCode: 0, stdout: "built", stderr: ""),
+                                    CommandResult(exitCode: 1, stdout: "", stderr: "boot failed")]
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/sim"))
+
+        // Exactly two steps ran — the sequence halted at the first non-zero exit.
+        #expect(h.runner.runActions == Array(simSteps.prefix(2)))
+        #expect(h.audit.entries.filter { $0.event == .actionRan(command: "/sim", exitCode: 0) }.count == 1)
+        #expect(h.audit.entries.filter { $0.event == .actionRan(command: "/sim", exitCode: 1) }.count == 1)
+        // I3: no step's captured stdout/stderr ever reaches an audit line — only token + exit code.
+        #expect(h.audit.entries.allSatisfy { !$0.line.contains("built") && !$0.line.contains("boot failed") })
+    }
 }

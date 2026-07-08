@@ -197,10 +197,12 @@ struct AuthGuardTests {
 
     private func makeGuard(_ clock: RelayBack.Clock,
                            commands: [ParameterizedCommand],
-                           repoConfigs: [RepoConfig] = []) -> AuthGuard {
+                           repoConfigs: [RepoConfig] = [],
+                           simulatorCommand: SimulatorCommandSpec? = nil) -> AuthGuard {
         AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
                   clock: clock, idleTimeout: idleTimeout,
-                  parameterizedCommands: commands, repoConfigs: repoConfigs)
+                  parameterizedCommands: commands, repoConfigs: repoConfigs,
+                  simulatorCommand: simulatorCommand)
     }
 
     @Test func parameterizedCommandIsNotMatchableWithNoConfiguredSpecs() {
@@ -371,5 +373,75 @@ struct AuthGuardTests {
         #expect(guardState.currentRepo == nil)    // the removed active repo is dropped immediately
         // A newly-added repo becomes selectable without a restart.
         #expect(guardState.authorize(fromId: allowed, text: "/cd relayback") == .control(.activeRepoSet(relayback)))
+    }
+
+    // MARK: - /sim multi-step simulator run (S19)
+
+    /// A repo fully configured for the simulator (scheme + destination + device).
+    private var simRepo: RepoConfig {
+        RepoConfig(name: "app", root: "/Users/op/dev/App",
+                   scheme: "App", destination: "platform=iOS Simulator,name=iPhone 15",
+                   simulatorDevice: "iPhone 15")
+    }
+
+    @Test func simNotMatchableWhenNotConfigured() {
+        // Mirrors the parameterized-command inertness test: with no sim command injected, /sim is
+        // just an unknown command — nothing new is matchable.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        #expect(guardState.authorize(fromId: allowed, text: "/sim") == .unknownCommand)
+    }
+
+    @Test func simRunsStepSequenceInTheActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo],
+                                   simulatorCommand: SimulatorCommand.spec)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        guard case let .ok(expected) = SimulatorCommand.steps(for: simRepo) else {
+            return #expect(Bool(false), "fixture repo should resolve")
+        }
+        #expect(guardState.authorize(fromId: allowed, text: "/sim") == .runActionSequence(expected))
+    }
+
+    @Test func simRequiresAnActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo],
+                                   simulatorCommand: SimulatorCommand.spec)
+        armed(&guardState, clock)
+        // Armed, but no /cd yet → the §4a precondition fails, nothing runs.
+        #expect(guardState.authorize(fromId: allowed, text: "/sim")
+                == .invalidParameters("select a repo first"))
+    }
+
+    @Test func simRejectsRepoWithNoSimulatorDevice() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback],
+                                   simulatorCommand: SimulatorCommand.spec)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")   // relayback has no device
+        #expect(guardState.authorize(fromId: allowed, text: "/sim")
+                == .invalidParameters("no simulator device configured for this repo"))
+    }
+
+    @Test func simAcceptsNoOperatorArguments() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo],
+                                   simulatorCommand: SimulatorCommand.spec)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        // A trailing token must not smuggle anything through — /sim takes no operator argument.
+        #expect(guardState.authorize(fromId: allowed, text: "/sim iPhone")
+                == .invalidParameters("unexpected extra input"))
+    }
+
+    @Test func simRequiresArmedSession() {
+        // I2: identity + arm gate come first — a disarmed operator is told to arm, not shown a result.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo],
+                                   simulatorCommand: SimulatorCommand.spec)
+        #expect(guardState.authorize(fromId: allowed, text: "/sim") == .disarmed)
     }
 }

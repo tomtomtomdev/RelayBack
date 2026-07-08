@@ -109,6 +109,11 @@ final class AppCoordinator {
 
         case let .runAction(action):
             await run(action, fromId: fromId, chatId: chatId)
+
+        case let .runActionSequence(actions):
+            // §4a / S19: a multi-step command (`/sim`) — run each config-built step in order,
+            // stopping at the first failure. Same per-step reply/audit contract as a single run.
+            await runSequence(actions, fromId: fromId, chatId: chatId)
         }
     }
 
@@ -143,7 +148,24 @@ final class AppCoordinator {
     // MARK: - Running an action (the only path that spawns a process — I2)
 
     private func run(_ action: Action, fromId: Int64, chatId: Int64) async {
-        let result = await runner.run(action)          // I1: fixed registry Action, no operator text
+        _ = await runStep(action, fromId: fromId, chatId: chatId)
+    }
+
+    /// Runs a multi-step action sequence (§4a / S19 — `/sim`) in order, stopping at the first step
+    /// that exits non-zero so a failed build never proceeds to boot/reveal. Each step goes through
+    /// the same `runStep`, so it is formatted, delivered, and audited (I3) exactly like a single
+    /// action; the steps come only from the guard's config-built sequence (I1) — no text is interpreted.
+    private func runSequence(_ actions: [Action], fromId: Int64, chatId: Int64) async {
+        for action in actions {
+            let result = await runStep(action, fromId: fromId, chatId: chatId)
+            if result.exitCode != 0 { break }   // halt the sequence at the first failing step
+        }
+    }
+
+    /// Spawns one action, delivers its formatted output, and audits it; returns the result so a
+    /// caller (the `/sim` sequence) can decide whether to continue. The only place a process runs (I2).
+    private func runStep(_ action: Action, fromId: Int64, chatId: Int64) async -> CommandResult {
+        let result = await runner.run(action)          // I1: fixed Action from the guard, no operator text
         for outgoing in OutputFormatter.format(result) {
             await send(outgoing, to: chatId)
         }
@@ -151,6 +173,7 @@ final class AppCoordinator {
         record(fromId: fromId, event: .actionRan(command: action.command, exitCode: result.exitCode))
         // S13b: feed the popover's last-result card (local UI only — not the audit log / Telegram).
         onActionCompleted?(action.command, result)
+        return result
     }
 
     // MARK: - Transport & audit helpers

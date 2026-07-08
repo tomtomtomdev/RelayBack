@@ -24,6 +24,10 @@ enum Decision: Equatable {
     case disarmed
     /// Authorized sender, armed session, matched action — safe to run (invariant I2).
     case runAction(Action)
+    /// Authorized sender, armed session, matched a MULTI-STEP command (§4a / S19 — `/sim`). Carries
+    /// the ordered step sequence, built entirely from the active repo's config (never operator text,
+    /// I1); the coordinator runs the steps in order and stops on the first non-zero exit.
+    case runActionSequence([Action])
     /// Authorized sender, armed session, matched a parameterized command, but a parameter failed
     /// validation (§4a). Carries a short, secret-free reason; nothing is spawned.
     case invalidParameters(String)
@@ -56,6 +60,12 @@ struct AuthGuard {
     /// resolved to an `Action` by `ParameterizedActionResolver`.
     private let parameterizedCommands: [ParameterizedCommand]
 
+    /// The MULTI-STEP simulator command (§4a / S19 — `/sim`), or nil when not enabled (the default,
+    /// so every existing call site and test is unchanged). Production injects `SimulatorCommand.spec`.
+    /// When a token matches, the guard builds the step sequence from the active repo via
+    /// `SimulatorCommand.steps(for:)` — never operator text (I1).
+    private let simulatorCommand: SimulatorCommandSpec?
+
     /// The configured repo allowlist (§4a working-directory allowlist, S16). Empty in v1 until the
     /// operator adds repos in Settings. `/cd <name>` selects one; git/build/sim commands run in the
     /// selected repo's root. No path ever comes from chat — a name is matched exactly against this.
@@ -82,7 +92,8 @@ struct AuthGuard {
          clock: Clock,
          idleTimeout: TimeInterval,
          parameterizedCommands: [ParameterizedCommand] = [],
-         repoConfigs: [RepoConfig] = []) {
+         repoConfigs: [RepoConfig] = [],
+         simulatorCommand: SimulatorCommandSpec? = nil) {
         self.allowlist = allowlist
         self.totpSecret = totpSecret
         self.registry = registry
@@ -90,6 +101,7 @@ struct AuthGuard {
         self.idleTimeout = idleTimeout
         self.parameterizedCommands = parameterizedCommands
         self.repoConfigs = repoConfigs
+        self.simulatorCommand = simulatorCommand
     }
 
     /// Replaces the authorization allowlist at runtime (S12 — hot-reload from Settings). Arm state
@@ -169,6 +181,9 @@ struct AuthGuard {
             if let spec = parameterizedCommands.first(where: { $0.command.lowercased() == token }) {
                 return resolveParameterized(spec, text: text)
             }
+            if let sim = simulatorCommand, sim.command.lowercased() == token {
+                return resolveSimulator(text: text)
+            }
             return .unknownCommand
         }
     }
@@ -216,6 +231,25 @@ struct AuthGuard {
             return .runAction(workingDirectory.map(action.withWorkingDirectory) ?? action)
         case let .invalid(reason):
             return .invalidParameters(reason)            // §4a: nothing spawns on bad input
+        }
+    }
+
+    /// Resolves the matched `/sim` command (§4a / S19) to a `.runActionSequence` or `.invalidParameters`.
+    /// Same gate order as a repo-scoped parameterized command: arm state first (I2), then the
+    /// active-repo precondition, then the no-operator-argument check, then the config-derived build.
+    /// The step sequence is drawn entirely from the active repo's config — never operator text (I1).
+    private mutating func resolveSimulator(text: String) -> Decision {
+        guard isArmed else { return .disarmed }                       // I2 before anything else
+        guard let repo = currentRepo else { return .invalidParameters("select a repo first") }
+        guard operatorArguments(in: text).isEmpty else {
+            return .invalidParameters("unexpected extra input")       // /sim takes no operator arg
+        }
+        switch SimulatorCommand.steps(for: repo) {
+        case let .ok(steps):
+            extendArmedWindow()
+            return .runActionSequence(steps)
+        case let .invalid(reason):
+            return .invalidParameters(reason)            // §4a: a repo missing config spawns nothing
         }
     }
 

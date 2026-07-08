@@ -400,6 +400,19 @@ repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
   macOS-manual only.
 - **Done when:** the orchestration builds the expected argv sequence in tests; documented manual
   verification steps recorded in `PROGRESS.md`.
+- ✅ **Done** — 286 tests / 36 suites green. Pure `Core/SimulatorCommand` builds the ordered
+  `xcodebuild build → xcrun simctl boot <device> → open -a Simulator` step sequence from the active
+  repo's config (scheme/destination/simulatorDevice), refusing if any field is missing; new
+  `Decision.runActionSequence([Action])` carries it; `AuthGuard` routes `/sim` (injected
+  `SimulatorCommandSpec?`, nil until wired) with the same arm → active-repo → no-operator-arg gates;
+  `AppCoordinator.runSequence` runs each step (shared `runStep`), stopping on the first non-zero
+  exit; `AppRuntime` injects `SimulatorCommand.spec` + advertises `/sim`. **Deviations:** `/sim` is
+  **build → boot → reveal**, not PLAN's literal `install → launch` (which needs a bundle-id +
+  product-path the v1 `RepoConfig` doesn't model — deferred, SPEC §4a note); and the multi-step
+  wrinkle is solved with a **dedicated builder + `runActionSequence`**, not a `.simulatorDevice`
+  `RepoConfigArg` (the `configArgs`-before-`fixedArgs` ordering can't express `simctl boot <device>`,
+  where the value trails the verb). No real simulator runs in CI (argv sequence + guard only);
+  manual steps in PROGRESS. See PROGRESS decisions.
 
 **S15–S19 done when:** an armed operator can `/cd` to a configured repo and run the git/build/sim
 commands from a phone, every parameter is validated-argv (no shell, proven by invariant tests),

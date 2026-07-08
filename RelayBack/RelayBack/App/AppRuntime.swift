@@ -85,7 +85,8 @@ final class AppRuntime {
                                   clock: clock,
                                   idleTimeout: idleTimeout,
                                   parameterizedCommands: GitCommands.all + BuildCommands.all,
-                                  repoConfigs: configStore.repos())
+                                  repoConfigs: configStore.repos(),
+                                  simulatorCommand: SimulatorCommand.spec)
 
         let sink = MenuBarAuditSink(base: FileAuditLog(fileURL: Self.auditLogURL()), menuBar: menuBar)
         let coordinator = AppCoordinator(authGuard: authGuard,
@@ -133,15 +134,17 @@ final class AppRuntime {
     // MARK: - Wiring helpers
 
     /// The autocompleted command list, derived from the action registry, the control commands, and
-    /// the parameterized git + build commands (S17/S18). `dropFirst()` strips the leading slash
-    /// Telegram adds.
+    /// the parameterized git + build commands (S17/S18) plus the multi-step `/sim` (S19).
+    /// `dropFirst()` strips the leading slash Telegram adds.
     private static func botCommands() -> [BotCommand] {
         let actions = ActionRegistry.seed.actions.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
-        let dev = (GitCommands.all + BuildCommands.all).map {
+        var dev = (GitCommands.all + BuildCommands.all).map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
+        dev.append(BotCommand(command: String(SimulatorCommand.spec.command.dropFirst()),
+                              description: SimulatorCommand.spec.description))
         let controls = [
             BotCommand(command: "arm", description: "Arm the session with a TOTP code"),
             BotCommand(command: "disarm", description: "Disarm the session"),
