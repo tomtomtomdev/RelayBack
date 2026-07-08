@@ -46,6 +46,19 @@ enum Theme {
         endPoint: .bottomTrailing
     )
 
+    // MARK: Avatar gradients (Allowlist member initials), indexed by
+    // `AllowlistMemberPresentation.avatarGradientIndex` — count must match `.gradientCount` (4).
+    static let avatarGradients: [LinearGradient] = [
+        LinearGradient(colors: [Color(hex: 0x0A6CFF), Color(hex: 0x5AC8FA)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing),
+        LinearGradient(colors: [Color(hex: 0xAF52DE), Color(hex: 0xFF2D92)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing),
+        LinearGradient(colors: [Color(hex: 0x34C759), Color(hex: 0x30D0B0)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing),
+        LinearGradient(colors: [Color(hex: 0xFF9F0A), Color(hex: 0xFF6482)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing),
+    ]
+
     // MARK: Radii
     enum Radius {
         static let popover: CGFloat = 14

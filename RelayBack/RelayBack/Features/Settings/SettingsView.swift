@@ -233,56 +233,111 @@ struct SettingsView: View {
         .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
     }
 
-    // MARK: - Allowlist pane (restyled fully in S13e)
+    // MARK: - Allowlist pane (S13e)
 
     private var allowlistPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            paneHeader("Allowlist",
-                       detail: "Authorized numeric Telegram from.id values — checked against message.from.id, never chat id.")
-            ForEach(model.allowlist.ids, id: \.self) { id in
-                HStack {
-                    Text(String(id)).font(.system(.body, design: .monospaced))
-                    Spacer()
-                    Button(role: .destructive) { model.removeId(id) } label: {
-                        Image(systemName: "trash")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                paneHeader("Allowlist",
+                           detail: "Updates are checked against numeric message.from.id — never chat id. Non-matches are dropped silently.")
+
+                VStack(spacing: 8) {
+                    ForEach(AllowlistMemberPresentation.rows(for: model.allowlist.ids)) { member in
+                        memberRow(member)
                     }
-                    .buttonStyle(.borderless)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+
+                if model.allowlist.ids.isEmpty {
+                    Text("No IDs yet — no one can run commands.")
+                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                }
+
+                addIdRow
+
+                if let error = model.allowlistError {
+                    Text(error).font(.caption).foregroundStyle(Theme.danger)
+                }
             }
-            if model.allowlist.ids.isEmpty {
-                Text("No IDs yet — no one can run commands.")
-                    .font(.caption).foregroundStyle(Theme.textSecondary)
-            }
-            HStack {
-                TextField("Add numeric id…", text: $model.newIdText)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.addId() }
-                Button("Add") { model.addId() }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(model.newIdText.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if let error = model.allowlistError {
-                Text(error).font(.caption).foregroundStyle(Theme.danger)
-            }
-            Spacer()
+            .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
         }
-        .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
     }
 
-    // MARK: - General pane (restyled fully in S13e)
+    private func memberRow(_ member: AllowlistMemberPresentation) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Theme.avatarGradients[member.avatarGradientIndex % Theme.avatarGradients.count])
+                    .frame(width: 32, height: 32)
+                Text(member.avatarInitial)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            Text(member.idText)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+            Spacer(minLength: 8)
+            if member.isPrimary {
+                Text("primary")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Theme.armedGreenText)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.armedGreen.opacity(0.12)))
+            }
+            // I2: the primary badge is cosmetic — every id, including primary, stays removable.
+            Button("Remove") { model.removeId(member.id) }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.danger)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
+    private var addIdRow: some View {
+        HStack(spacing: 9) {
+            TextField("Add numeric id…", text: $model.newIdText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .monospaced))
+                .padding(.horizontal, 11).padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+                .onSubmit { model.addId() }
+            Button("Add") { model.addId() }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(model.newIdText.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+
+    // MARK: - General pane (S13e)
 
     private var generalPane: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             paneHeader("General", detail: "Startup behavior.")
-            Toggle("Launch at login", isOn: Binding(
-                get: { model.launchAtLogin },
-                set: { model.setLaunchAtLogin($0) }
-            ))
-            .toggleStyle(.switch)
-            .tint(Theme.armedGreen)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Launch at login").font(.system(size: 13.5))
+                    Text("Start RelayBack automatically when you log in, so the agent is always listening.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 12)
+                Toggle("", isOn: Binding(
+                    get: { model.launchAtLogin },
+                    set: { model.setLaunchAtLogin($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Theme.armedGreen)
+            }
+            .padding(.horizontal, 13).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+
+            if let error = model.lastError {
+                Text(error).font(.caption).foregroundStyle(Theme.danger)
+            }
             Spacer()
         }
         .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))

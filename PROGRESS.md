@@ -5,6 +5,21 @@
 
 ## Current state
 
+- **S13e done — Allowlist pane + General pane styled to the handoff.** The **Allowlist** pane is now
+  the handoff's member list: per-member cards with a gradient avatar (initial + color derived from
+  the id), the mono `id <n>`, a cosmetic green **`primary`** badge on the lowest id, and a **Remove**
+  affordance on every row; below it the mono **Add numeric id…** field + blue **Add** button, plus
+  the empty state. The **General** pane relocates **Launch at login** into a card row (label +
+  subtitle + green switch). New pure type (TDD'd): `Features/Settings/AllowlistMemberPresentation`
+  (`rows(for: [Int64])` → sorted rows, lowest id `isPrimary`; `idText`, `avatarInitial` = leading
+  digit, `avatarGradientIndex` = stable in-range bucket). `Theme` gained a 4-gradient `avatarGradients`
+  palette indexed by that bucket. **Decision: option (a) — ids-only** (no `ConfigStore`/`AllowlistDraft`
+  data-model change); names/avatars/`primary` are illustrative, derived from the id. **I2 preserved:**
+  the `primary` badge is cosmetic — every id including primary stays removable (a deliberate, minor
+  deviation from the handoff, which hides Remove on primary). No core/security change.
+- ✅ **S13e verified green on macOS** (this session): full `RelayBackTests` suite = **182 tests /
+  27 suites** passing (added `AllowlistMemberPresentationTests` (6)). App builds clean; the configured
+  Preview renders the member cards, primary badge, add row, and General toggle.
 - **S13d done — Settings sidebar shell + Security pane.** `SettingsView` was reshaped from the
   single grouped `Form` into the handoff's **176px sidebar window** (660×520): a sidebar of five
   panes — Connection · Allowlist · **Security** · Audit · General — swaps the content area. New pure
@@ -163,15 +178,14 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S13e** — Allowlist pane + General pane: style the **Allowlist** pane to the
-  handoff (member rows: avatar initial + label + mono id + `primary`/`Remove`; add-id row) and the
-  small **General** pane (launch-at-login relocated). **Decide first (record here):** the handoff
-  shows per-member **labels** + a **primary** badge, but `ConfigStore`/`AllowlistDraft` store bare
-  `Int64`s — either (a) keep **ids-only** (render an initial from the id, no label store — smallest,
-  no data-model change) or (b) extend the config with an optional label + primary flag (test-first on
-  `AllowlistDraft`, round-tripped through `ConfigStore`). Recommend **(a)** for v1. Then **S13f**
-  (Audit + Connection panes) needs new seams — an `AuditReading` read side + `TelegramTransport.getMe`
-  (or a generic connected state). v1 *logic* DoD is
+- **Next slice:** **S13f** — Audit + Connection panes. This is the last design-conformance sub-slice
+  and it needs new seams (build them behind protocols with fakes, TDD-first): (1) an **`AuditReading`**
+  read side for the audit log (current `AuditSink` is write-only) — TDD a pure `AuditRowPresentation`
+  (columns Time · from.id · Action/decision · Exit + severity, **secret/output-free — assert I3**)
+  against a fake reader; keep the real bounded-tail file read thin + smoke-tested. (2) A view-model
+  connection state `.connecting | .connected(botUsername:) | .error` + a pure `connectionState →
+  (label, style)` mapping — **decide** whether to add `TelegramTransport.getMe` (fake it) or show a
+  generic connected state without the username; record the choice. v1 *logic* DoD is
   met, but the remaining SwiftUI surfaces don't yet match the high-fidelity design handoff
   (`design_handoff_relayback_app/`) and the finalized app icon was never integrated. **S13** (drafted
   in PLAN, split into S13a–S13f) recreates the six handoff surfaces natively, TDD-first (pure
@@ -207,7 +221,7 @@
 | S13b | · Popover armed content (actions/result/disarm)  | ✅ done |
 | S13c | · Recent-activity color coding                   | ✅ done |
 | S13d | · Settings sidebar shell + Security pane         | ✅ done |
-| S13e | · Allowlist pane + General pane                  | ☐ not started |
+| S13e | · Allowlist pane + General pane                  | ✅ done |
 | S13f | · Audit pane + Connection pane                   | ☐ not started |
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
 | —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
@@ -219,13 +233,30 @@
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
-_Two open tracks remain: the **S13d–S13f** design-conformance sub-slices (Settings panes) and the
-**S15–S19** dev-workflow epic. Neither is started; pick one per session._
+_Two open tracks remain: the final **S13f** design-conformance sub-slice (Audit + Connection panes)
+and the **S15–S19** dev-workflow epic. Pick one per session._
 
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S13e: **Allowlist stays ids-only (option (a)) — labels/avatars/`primary` are derived,
+  not stored.** The handoff shows per-member names, colored avatars, and a `primary` badge, but the
+  persisted `ConfigStore`/`AllowlistDraft` keep a bare `[Int64]`. Rather than widen the data model
+  (option (b): optional label + primary flag round-tripped through the store), the illustrative fields
+  are derived from the id by a pure `AllowlistMemberPresentation` (`avatarInitial` = leading digit,
+  `avatarGradientIndex` = `id % 4` into a new `Theme.avatarGradients`, `isPrimary` = lowest id). Why:
+  smallest change, no migration, no new persistence surface for v1; the id is the only real identity
+  the guard checks (I2). This slightly sharpens PLAN, which said option (a) is "styling only, no new
+  logic" — a tiny TDD'd presentation type was added instead of putting derivation in the view, since
+  CLAUDE mandates a failing test per slice.
+- 2026-07-08 — S13e: **The `primary` badge is cosmetic; every id including primary stays removable
+  (I2).** The handoff hides the Remove affordance on the primary member. RelayBack instead keeps
+  Remove on every row and shows `primary` only as a green marker on the lowest id — a deliberate,
+  minor visual deviation. Rationale: I2 requires that a compromised/rotated id can be revoked
+  immediately; a UI that locked the "primary" id could otherwise strand a bad id (and there is no
+  real "primary" concept in `AuthGuard` — all allowlisted ids are equal). Removal semantics are
+  unchanged from S12 (`SettingsModel.removeId` → `AllowlistDraft.remove` → persist + hot-reload).
 - 2026-07-06 — S13d: **Idle-timeout & drift-tolerance are DISPLAY-ONLY (the S13d decision).** SPEC
   §9 pins the TOTP config fixed and `TOTP`/`OtpAuthURI` are pinned to it; `AuthGuard` uses a fixed
   300s idle window and `TOTP.validate` defaults to `driftSteps: 1`. So the two Security-pane rows
