@@ -5,6 +5,28 @@
 
 ## Current state
 
+- **S17 done — git commands wired (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`).**
+  The dev-workflow epic's first spawning commands are live. The S15/S16 mechanism
+  (resolver + validators + active-repo precondition) was already tested, so S17 is spec data + wiring:
+  - **`Core/GitCommands.all`** — six `ParameterizedCommand` specs, all `requiresActiveRepo: true`,
+    all `/usr/bin/git`: `/gitstatus` (`status`), `/branch` (`branch`), `/checkout <branch>`
+    (`checkout <branch>`, `.branch` param), `/pull` (`pull --ff-only`), `/push` (`push` — bare,
+    upstream-only, no remote/refspec arg), `/commit <msg>` (`commit -a -m <msg>`, `.commitMessage`
+    param). Local ops time out at 30s, network ops (`/pull`/`/push`) at 120s.
+  - **`AppRuntime` wiring** — `start()` now passes `parameterizedCommands: GitCommands.all` to the
+    `AuthGuard`, and `botCommands()` advertises the six via `setMyCommands`. Each runs in the session's
+    active repo root (set by `/cd`); with no active repo → `.invalidParameters("select a repo first")`
+    *before* validation (§4a). I1/I4 unchanged: fixed executable + fixed leading argv, only validated
+    values at fixed indices, spawned as the normal user under the restricted PATH.
+  - **Deviation from PLAN:** `/checkout` builds `git checkout <branch>`, **not** `checkout -- <branch>`.
+    A `--` makes git treat the token as a *pathspec* (it would try to restore a file named after the
+    branch), so `checkout -- main` would never switch branches. `ParamValidator.branch` already rejects
+    a leading `-` (the real flag-injection guard, per S15), so dropping the redundant `--` costs no
+    safety and restores correct branch-switch semantics. Documented in the decisions log below.
+- ✅ **S17 verified green on macOS** (this session): full `RelayBackTests` suite = **265 tests /
+  34 suites** passing (added `GitCommandsTests` (12) — exact argv per command, checkout/commit
+  validation, `/push`/`/pull` reject operator args, and a **real git smoke**: `/gitstatus` returns
+  exit 0 in a throwaway `git init` temp repo). App builds clean.
 - **S16 done — repo config + active-repo selection (`/cd`/`/pwd`/`/repos`).** The dev-workflow epic
   now has a persisted repo allowlist and a session active-repo, and the first user-facing
   parameterized commands are matchable. New pieces:
@@ -272,13 +294,15 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S17** — Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/
-  `/commit`). S16 landed the repo allowlist + active-repo session + the `requiresActiveRepo`
-  precondition, so S17 just appends `ParameterizedCommand` specs for `/usr/bin/git` (each
-  `requiresActiveRepo: true`, fixed argv + validated params) to the production `parameterizedCommands`
-  set in `AppRuntime`, plus a real smoke test against a throwaway git repo. See PLAN S17. The
-  resolver/validator/active-repo mechanism is already tested; S17 is mostly wiring + the git smoke.
-  Other optional follow-ups (not blocking the epic): per-second live menu-bar countdown; a
+- **Next slice:** **S18** — `xcodebuild` (`/build`). Same pattern as S17: append a single
+  `ParameterizedCommand` for `/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination>
+  build` (cwd = active repo root, longer timeout), scheme/destination drawn **only** from the active
+  `RepoConfig` (not operator text, not argv). New wrinkle vs S17: the argv depends on the active repo's
+  config, so either the resolver/guard must read `cfg.scheme`/`cfg.destination` when building the
+  action (a repo lacking a configured scheme → `.invalidParameters`), or a small build-spec factory is
+  needed. `/build` accepts no operator args. Tests: assert the argv is built from config + the
+  no-scheme rejection; no real build in CI (argv + guard only). See PLAN S18. Other optional
+  follow-ups (not blocking the epic): per-second live menu-bar countdown; a
   real-Keychain/UserDefaults launch smoke; a live per-poll connection indicator reading the S14
   `connection.log`; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
@@ -316,7 +340,7 @@
 | —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
 | S15  | Parameterized-action foundation *(dev-workflow epic)* | ✅ done |
 | S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ✅ done |
-| S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ☐ not started |
+| S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ✅ done |
 | S18  | xcodebuild (`/build`) | ☐ not started |
 | S19  | Simulator run (`/sim`) | ☐ not started |
 
@@ -330,6 +354,26 @@ slice per session._
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S17: **`/checkout` builds `git checkout <branch>`, dropping PLAN's `--` guard.** PLAN
+  S17 (and the S15 illustrative spec) wrote `checkout -- <branch>`, but git treats everything after
+  `--` as a *pathspec*: `git checkout -- main` tries to restore a file named `main`, it does not switch
+  to branch `main` — so the command as specified would never work. `ParamValidator.branch` already
+  rejects a leading `-` (per S15, "the real guard is the leading-`-` rejection so a value can never be
+  read as a flag"), so the `--` was redundant belt-and-suspenders for flag safety and actively broke
+  the feature. Dropped it for `/checkout` only; `/commit`'s `-m` value is unaffected (it follows a
+  flag, not a pathspec). Net: no safety change, correct branch-switch semantics.
+- 2026-07-08 — S17: **The git commands are pure spec data (`GitCommands.all`), not new logic.** S15/S16
+  built and tested the whole resolve→run path (resolver, validators, `requiresActiveRepo` precondition,
+  active-repo→`workingDirectory`), so S17 adds only a static `[ParameterizedCommand]` + two lines of
+  `AppRuntime` wiring (into the guard + `setMyCommands`). `GitCommandsTests` pins the *specs* (exact
+  argv, validation, no-arg enforcement) via the already-tested resolver; the guard routing itself is
+  covered by the S15/S16 `AuthGuardTests`. The PLAN-mandated real smoke (`git init` a temp repo →
+  `/gitstatus` exit 0 through `ProcessCommandRunner`) is the one real-`git` process test.
+- 2026-07-08 — S17: **`/push` is bare (`git push`) and `/pull` is `git pull --ff-only`; both take no
+  operator args.** Upstream-only per SPEC §4a — no remote/refspec is ever built, so a push can only
+  reach the current branch's configured upstream and a pull can only fast-forward (never a merge
+  commit from a surprise remote). The zero-parameter resolver path rejects any trailing operator input
+  (`.invalid("unexpected extra input")`), asserted for both. Network timeout is 120s (vs 30s local).
 - 2026-07-08 — S16: **Active repo is session state selected by `/cd`, not a per-command `.repoName`
   parameter — this sharpens §4a.** §4a framed the repo as a per-action validated parameter (the S15
   `.repoName` `ParamKind`, which stays available but is now inert). Instead the operator sets an

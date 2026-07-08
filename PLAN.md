@@ -365,6 +365,14 @@ repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
   rejects a leading-`-` message and caps length; every command runs with cwd = active repo root.
 - **Done when:** git resolver/guard tests green; a real smoke test against a throwaway git repo
   (init in a temp dir) confirms `/gitstatus` returns exit 0.
+- ✅ **Done** — 265 tests / 34 suites green. `Core/GitCommands.all` holds the six repo-scoped
+  `/usr/bin/git` specs (`/gitstatus`, `/branch`, `/checkout <branch>`, `/pull --ff-only`, `/push`,
+  `/commit -a -m <msg>`), each `requiresActiveRepo: true`; `AppRuntime` wires them into the guard's
+  `parameterizedCommands` and advertises them via `setMyCommands`. `GitCommandsTests` (12) pins the
+  exact argv per command, the checkout/commit validation, that `/push`/`/pull` take no operator args,
+  and the real git smoke (`/gitstatus` exit 0 in a temp repo). **Deviation:** `/checkout` builds
+  `git checkout <branch>` (no `--`) — a `--` forces pathspec interpretation and would break the branch
+  switch; the leading-`-` rejection in `ParamValidator.branch` is the real flag guard. See PROGRESS.
 
 ### S18 — xcodebuild
 - **Goal:** `/build` → `/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination>

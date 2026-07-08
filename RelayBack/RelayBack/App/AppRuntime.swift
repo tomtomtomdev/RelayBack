@@ -76,13 +76,14 @@ final class AppRuntime {
 
         let clock = SystemClock()
         // Seed the guard from the persisted allowlist + repos (S12/S16) — the source of truth across
-        // launches. No parameterized commands are wired yet (S17+ add the git/build/sim specs), so
-        // the repo table is seeded but only `/cd`/`/pwd`/`/repos` use it until then.
+        // launches. S17 wires the git commands: each is repo-scoped, so it runs in the active repo
+        // selected with `/cd` and refuses until one is chosen (§4a).
         let authGuard = AuthGuard(allowlist: Set(configStore.allowlist()),
                                   totpSecret: secret,
                                   registry: .seed,
                                   clock: clock,
                                   idleTimeout: idleTimeout,
+                                  parameterizedCommands: GitCommands.all,
                                   repoConfigs: configStore.repos())
 
         let sink = MenuBarAuditSink(base: FileAuditLog(fileURL: Self.auditLogURL()), menuBar: menuBar)
@@ -130,9 +131,13 @@ final class AppRuntime {
 
     // MARK: - Wiring helpers
 
-    /// The autocompleted command list, derived from the action registry plus the control commands.
+    /// The autocompleted command list, derived from the action registry, the control commands, and
+    /// the parameterized git commands (S17). `dropFirst()` strips the leading slash Telegram adds.
     private static func botCommands() -> [BotCommand] {
         let actions = ActionRegistry.seed.actions.map {
+            BotCommand(command: String($0.command.dropFirst()), description: $0.description)
+        }
+        let git = GitCommands.all.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
         let controls = [
@@ -143,7 +148,7 @@ final class AppRuntime {
             BotCommand(command: "cd", description: "Select the active repo"),
             BotCommand(command: "pwd", description: "Show the active repo"),
         ]
-        return controls + actions
+        return controls + actions + git
     }
 
     /// The append-only audit log location under Application Support (FR-8).
