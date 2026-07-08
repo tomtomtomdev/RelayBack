@@ -5,6 +5,38 @@
 
 ## Current state
 
+- **S18 done — `xcodebuild` wired (`/build`).** The dev-workflow epic's build command is live. Unlike
+  the S17 git commands (fully fixed argv), `/build`'s `-scheme`/`-destination` values are drawn from
+  the **active repo's `RepoConfig`** — never operator text, never an argv slot the operator controls.
+  New pieces:
+  - **`RepoConfigArg` enum** (`.scheme`/`.destination`) + **`ParameterizedCommand.configArgs:
+    [RepoConfigArg]`** (default `[]`, `Equatable` preserved). Config args are emitted **before**
+    `fixedArgs` in the argv, so `configArgs: [.scheme, .destination]` + `fixedArgs: ["build"]` yields
+    `-scheme <cfg.scheme> -destination <cfg.destination> build`. Git specs have empty `configArgs` →
+    argv unchanged (no regression).
+  - **Resolver gained `activeRepo: RepoConfig? = nil`** (default keeps all S15/S17 call sites
+    compiling). It builds the config args from that repo, returning `.invalid("no scheme configured
+    for this repo")` / `.invalid("no destination configured for this repo")` when the field is absent
+    — nothing spawns (§4a). The operator-token count check still runs first, so `/build <anything>` →
+    `.invalid("unexpected extra input")` (no operator args accepted).
+  - **`Core/BuildCommands.all`** — the one `/build` spec: `/usr/bin/xcodebuild`, `configArgs: [.scheme,
+    .destination]`, `fixedArgs: ["build"]`, no params, `requiresActiveRepo: true`, 1800s timeout
+    (xcodebuild is slow).
+  - **`AuthGuard` threads `currentRepo`** into `ParameterizedActionResolver.resolve(...)` so a
+    config-derived command reads the active repo's full `RepoConfig` (S16 only gave the resolver the
+    name→root `repoTable`). The `requiresActiveRepo` precondition (S16) still injects the repo root as
+    `workingDirectory`, so `/build` runs in the active repo. I1/I4 unchanged: fixed executable + fixed
+    `build` action + config-sourced flag values, spawned as the normal user under the restricted PATH.
+  - **`AppRuntime` wiring** — `parameterizedCommands: GitCommands.all + BuildCommands.all`, and
+    `botCommands()` advertises `/build` via `setMyCommands`.
+- ✅ **S18 verified green on macOS** (this session): full `RelayBackTests` suite = **272 tests /
+  35 suites** passing (added `BuildCommandsTests` (5) — argv-from-config, no-operator-arg, and the
+  missing-scheme/-destination rejections; + `AuthGuardTests` (2) — the guard passes the active repo's
+  full config through to `/build`, and refuses a repo with no scheme). App builds clean. **No real
+  xcodebuild runs in CI** (argv + guard only, per PLAN). Note: the `test` action's fresh app-host
+  launch flaked with "test runner hung before establishing connection" (an LSUIElement menu-bar
+  test-host quirk); `build-for-testing` + `test-without-building` (after `pkill -9 -f RelayBack.app`)
+  runs the suite cleanly — use that split if `test` hangs.
 - **S17 done — git commands wired (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`).**
   The dev-workflow epic's first spawning commands are live. The S15/S16 mechanism
   (resolver + validators + active-repo precondition) was already tested, so S17 is spec data + wiring:
@@ -294,17 +326,18 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S18** — `xcodebuild` (`/build`). Same pattern as S17: append a single
-  `ParameterizedCommand` for `/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination>
-  build` (cwd = active repo root, longer timeout), scheme/destination drawn **only** from the active
-  `RepoConfig` (not operator text, not argv). New wrinkle vs S17: the argv depends on the active repo's
-  config, so either the resolver/guard must read `cfg.scheme`/`cfg.destination` when building the
-  action (a repo lacking a configured scheme → `.invalidParameters`), or a small build-spec factory is
-  needed. `/build` accepts no operator args. Tests: assert the argv is built from config + the
-  no-scheme rejection; no real build in CI (argv + guard only). See PLAN S18. Other optional
-  follow-ups (not blocking the epic): per-second live menu-bar countdown; a
-  real-Keychain/UserDefaults launch smoke; a live per-poll connection indicator reading the S14
-  `connection.log`; SPEC §10 future-phase items.
+- **Next slice:** **S19** — Simulator run (`/sim`), the last dev-workflow slice and the most
+  involved. `/xcrun simctl` multi-step orchestration (boot → install → launch) on the active repo's
+  configured `simulatorDevice`, device drawn **only** from `RepoConfig` (like S18's scheme/destination).
+  Wrinkle vs S18: `/sim` is a *sequence* of processes, not one — the current `ParameterizedCommand`
+  models a single spawn, so S19 needs either a multi-step spec (a list of argv steps built from
+  config) or a small orchestrator that runs them in order and stops on first non-zero exit. Reuse the
+  S18 `configArgs` mechanism for the device value (add a `.simulatorDevice` `RepoConfigArg` case, or a
+  device-specific step builder); unknown/missing device → `.invalidParameters`; no operator arg
+  accepted. Tests assert the argv *sequence* is built from config (no real sim run in CI — macOS-manual
+  only); record the manual verification steps in PROGRESS. See PLAN S19. Other optional follow-ups (not
+  blocking the epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; a
+  live per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -341,7 +374,7 @@
 | S15  | Parameterized-action foundation *(dev-workflow epic)* | ✅ done |
 | S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ✅ done |
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ✅ done |
-| S18  | xcodebuild (`/build`) | ☐ not started |
+| S18  | xcodebuild (`/build`) | ✅ done |
 | S19  | Simulator run (`/sim`) | ☐ not started |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
@@ -354,6 +387,30 @@ slice per session._
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S18: **Config-derived argv is data-driven (`configArgs: [RepoConfigArg]`), not a
+  build-spec factory.** PLAN offered two options for the S18 wrinkle (argv depends on the active repo's
+  config): the resolver/guard reads `cfg.scheme`/`cfg.destination`, *or* a small build-spec factory
+  builds a concrete `ParameterizedCommand` per repo. Chose the former, expressed as a new
+  `RepoConfigArg` enum field on `ParameterizedCommand`. Why: (1) `/build` stays a single static spec in
+  `BuildCommands.all` — matchable in the guard and advertisable via `setMyCommands` with no parallel
+  representation; (2) `ParameterizedCommand` stays `Equatable` (a factory returning closures would not);
+  (3) the resolver stays pure and the whole thing is table-tested like `ParamKind`. A factory would
+  have needed a second `/build` representation (marker spec for matching + factory for argv), which is
+  more surface for no benefit.
+- 2026-07-08 — S18: **`configArgs` are emitted BEFORE `fixedArgs` in the argv; the value comes only
+  from `RepoConfig`.** Argv is `configArgs + fixedArgs + valueArgs`, so `/build` builds `-scheme X
+  -destination Y build` (matching PLAN's literal wording), while the git commands (empty `configArgs`)
+  are unchanged. The scheme/destination values are read from the active repo's config — never operator
+  text, never an argv index the operator fills — so I1 holds by construction; a repo missing either
+  field is refused (`.invalid("no scheme/destination configured for this repo")`) rather than spawning
+  a partial xcodebuild. `/build` takes **no** operator arguments (0 params → any trailing input →
+  `"unexpected extra input"`, same guard as `/push`/`/pull`).
+- 2026-07-08 — S18: **The guard now passes `currentRepo` (full `RepoConfig`) to the resolver.** S16
+  gave the resolver only the name→root `repoTable`; a config-derived command needs the whole config, so
+  `resolveParameterized` now calls `resolve(..., activeRepo: currentRepo)`. The `activeRepo` param
+  defaults to nil, so every S15/S17 resolver call site (and the git tests) compiles unchanged, and git
+  commands (no `configArgs`) ignore it. The `requiresActiveRepo` precondition is unchanged — it still
+  runs first and injects the repo root as `workingDirectory`.
 - 2026-07-08 — S17: **`/checkout` builds `git checkout <branch>`, dropping PLAN's `--` guard.** PLAN
   S17 (and the S15 illustrative spec) wrote `checkout -- <branch>`, but git treats everything after
   `--` as a *pathspec*: `git checkout -- main` tries to restore a file named `main`, it does not switch

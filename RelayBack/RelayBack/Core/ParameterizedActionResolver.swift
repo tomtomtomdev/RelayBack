@@ -27,6 +27,18 @@ enum ParamKind: Equatable {
     case commitMessage
 }
 
+/// A build-config value drawn from the session's **active repo** (§4a / S18) — NEVER operator text.
+/// Each emits a fixed flag followed by the repo's configured value at a fixed argv position (e.g.
+/// `-scheme <cfg.scheme>`). Because the value comes only from `RepoConfig`, the operator can never
+/// influence it (I1); a repo missing the required config makes resolution fail rather than build a
+/// partial `xcodebuild` invocation. Consumed by `/build` (S18) and the later `/sim` (S19).
+enum RepoConfigArg: Equatable {
+    /// Emits `["-scheme", cfg.scheme]`; fails if the active repo has no scheme.
+    case scheme
+    /// Emits `["-destination", cfg.destination]`; fails if the active repo has no destination.
+    case destination
+}
+
 /// A parameterized dev-workflow command: a fixed executable + fixed leading argv, followed by an
 /// ordered list of validated parameter slots. Everything except the operator-supplied parameter
 /// values is fixed in code (§4a / I1).
@@ -40,6 +52,10 @@ struct ParameterizedCommand: Equatable {
     /// Fixed leading arguments (e.g. `["checkout", "--"]`). Never derived from operator text; a
     /// trailing `--` here is the flag guard for a following value parameter.
     let fixedArgs: [String]
+    /// Build-config args drawn from the active repo (§4a / S18), emitted BEFORE `fixedArgs` — e.g.
+    /// `[.scheme, .destination]` yields `-scheme <cfg.scheme> -destination <cfg.destination>`. Empty
+    /// for the git commands (their argv is fully fixed). Never derived from operator text.
+    let configArgs: [RepoConfigArg]
     /// The ordered operator-supplied parameter slots that follow `fixedArgs`.
     let parameters: [ParamKind]
     /// Wall-clock limit for the spawned process.
@@ -54,6 +70,7 @@ struct ParameterizedCommand: Equatable {
          description: String,
          executable: String,
          fixedArgs: [String],
+         configArgs: [RepoConfigArg] = [],
          parameters: [ParamKind],
          timeout: TimeInterval,
          requiresActiveRepo: Bool = false) {
@@ -61,6 +78,7 @@ struct ParameterizedCommand: Equatable {
         self.description = description
         self.executable = executable
         self.fixedArgs = fixedArgs
+        self.configArgs = configArgs
         self.parameters = parameters
         self.timeout = timeout
         self.requiresActiveRepo = requiresActiveRepo
@@ -78,14 +96,34 @@ enum ParameterizedActionResolver {
     /// Validates each operator token against its slot and builds the fixed argv, or refuses.
     /// `argTokens` are the operator-supplied values in slot order (a repo-name/branch token has no
     /// spaces; a commit message is a single token that may contain spaces). `repoTable` maps a
-    /// configured repo name to its absolute root.
+    /// configured repo name to its absolute root. `activeRepo` is the session's active repo (S18):
+    /// a spec with `configArgs` draws its scheme/destination from it, refusing if unconfigured.
     static func resolve(_ spec: ParameterizedCommand,
                         argTokens: [String],
-                        repoTable: [String: String]) -> ParameterResolution {
+                        repoTable: [String: String],
+                        activeRepo: RepoConfig? = nil) -> ParameterResolution {
         guard argTokens.count == spec.parameters.count else {
             return .invalid(reason: argTokens.count < spec.parameters.count
                             ? "missing parameter"
                             : "unexpected extra input")
+        }
+
+        // Build-config args (§4a / S18): flag + the active repo's configured value. The values come
+        // only from `RepoConfig`, never operator text (I1); a repo missing the config is refused.
+        var configArgs: [String] = []
+        for kind in spec.configArgs {
+            switch kind {
+            case .scheme:
+                guard let scheme = activeRepo?.scheme, !scheme.isEmpty else {
+                    return .invalid(reason: "no scheme configured for this repo")
+                }
+                configArgs += ["-scheme", scheme]
+            case .destination:
+                guard let destination = activeRepo?.destination, !destination.isEmpty else {
+                    return .invalid(reason: "no destination configured for this repo")
+                }
+                configArgs += ["-destination", destination]
+            }
         }
 
         var valueArgs: [String] = []
@@ -114,7 +152,9 @@ enum ParameterizedActionResolver {
         let action = Action(command: spec.command,
                             description: spec.description,
                             executable: spec.executable,
-                            arguments: spec.fixedArgs + valueArgs,   // I1: fixed argv + validated values
+                            // I1: config-derived args + fixed argv + validated operator values —
+                            // none of which the operator can point at the executable slot.
+                            arguments: configArgs + spec.fixedArgs + valueArgs,
                             timeout: spec.timeout,
                             workingDirectory: workingDirectory)
         return .ok(action)

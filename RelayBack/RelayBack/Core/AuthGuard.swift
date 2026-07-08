@@ -205,8 +205,11 @@ struct AuthGuard {
             workingDirectory = repo.root
         }
 
+        // §4a / S18: pass the active repo so a config-derived command (`/build`) can draw its
+        // scheme/destination from `RepoConfig` — never operator text. Git commands ignore it.
         let argTokens = operatorArguments(in: text)
-        switch ParameterizedActionResolver.resolve(spec, argTokens: argTokens, repoTable: repoTable) {
+        switch ParameterizedActionResolver.resolve(spec, argTokens: argTokens,
+                                                   repoTable: repoTable, activeRepo: currentRepo) {
         case let .ok(action):
             extendArmedWindow()
             // §4a: a repo-scoped command runs in the active repo's root (drawn only from config).

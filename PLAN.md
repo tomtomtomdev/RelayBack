@@ -381,6 +381,16 @@ repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
   args; a repo lacking a configured scheme → `.invalidParameters`. (No real build in CI — assert
   argv + guard only; optional manual run on macOS.)
 - **Done when:** build resolver/guard tests green.
+- ✅ **Done** — 272 tests / 35 suites green. `Core/BuildCommands.all` holds the one `/build` spec
+  (`/usr/bin/xcodebuild -scheme <cfg.scheme> -destination <cfg.destination> build`), repo-scoped, no
+  operator params. New wrinkle solved data-driven: `ParameterizedCommand` gained `configArgs:
+  [RepoConfigArg]` (`.scheme`/`.destination`) emitted before `fixedArgs`; the resolver gained an
+  `activeRepo: RepoConfig?` arg and draws those values from it (refusing with "no scheme/destination
+  configured for this repo" if absent) — never operator text, never argv the operator controls (I1).
+  `AuthGuard` threads `currentRepo` into the resolver; `AppRuntime` wires `GitCommands.all +
+  BuildCommands.all` into the guard + `setMyCommands`. `BuildCommandsTests` (5) pin the argv, the
+  no-operator-arg rule, and the missing-scheme/-destination rejections; `AuthGuardTests` (2) prove
+  the guard passes the active repo's full config through. No real xcodebuild runs in CI.
 
 ### S19 — Simulator run *(most involved; xcrun simctl orchestration)*
 - **Goal:** `/sim` → build for the configured simulator, install, launch on `cfg.simulatorDevice`

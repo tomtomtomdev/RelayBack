@@ -333,6 +333,33 @@ struct AuthGuardTests {
         #expect(guardState.currentRepo == nil)
     }
 
+    // MARK: - /build reads the active repo's build config (S18)
+
+    @Test func buildRunsWithConfigArgvInTheActiveRepoRoot() {
+        // The guard must thread the active repo's RepoConfig (not just its root) into the resolver,
+        // so the scheme/destination argv is drawn from config — never operator text (§4a / S18).
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: BuildCommands.all, repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        let expected = Action(
+            command: "/build", description: BuildCommands.all[0].description,
+            executable: "/usr/bin/xcodebuild",
+            arguments: ["-scheme", "RelayBack", "-destination", "platform=macOS", "build"],
+            timeout: BuildCommands.all[0].timeout, workingDirectory: "/Users/op/dev/RelayBack")
+        #expect(guardState.authorize(fromId: allowed, text: "/build") == .runAction(expected))
+    }
+
+    @Test func buildRejectsWhenActiveRepoHasNoScheme() {
+        // `notes` is a plain repo with no scheme/destination → /build refuses, nothing spawns.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: BuildCommands.all, repoConfigs: [notes])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd notes")
+        #expect(guardState.authorize(fromId: allowed, text: "/build")
+                == .invalidParameters("no scheme configured for this repo"))
+    }
+
     @Test func updateReposHotReloadsAndDropsARemovedActiveRepo() {
         let clock = TestClock(start)
         var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
