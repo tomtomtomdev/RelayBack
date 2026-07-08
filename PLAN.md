@@ -345,6 +345,15 @@ repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
   `.invalidParameters`; `/cd` valid sets context; git/exec command with no active repo →
   `.invalidParameters("select a repo first")`; `/repos` never leaks anything beyond name/root.
 - **Done when:** config + selection tests green; Settings repo editor usable in a Preview.
+- ✅ **Done** — 253 tests / 33 suites green. `Core/RepoConfig` (Codable) persisted via
+  `ConfigStore.repos()`/`setRepos()` (JSON in UserDefaults, fails closed); `AuthGuard` gained
+  active-repo session state + `/cd`/`/pwd`/`/repos` control commands + a `requiresActiveRepo`
+  precondition on parameterized specs (injects the active repo's root as `workingDirectory`) +
+  `updateRepos` hot-reload; pure `Core/RepoListPresentation` (name+root only, no build-config leak);
+  Settings gained a **Repos** pane + `SettingsModel.addRepo`/`removeRepo` (+ `onReposChanged`
+  hot-reload); `AppRuntime` seeds the guard's repos and advertises `/cd`/`/pwd`/`/repos`. Active repo
+  is cleared on disarm / fresh arm (§4a). No parameterized git/build/sim spec is wired yet (S17+).
+  See PROGRESS decisions.
 
 ### S17 — Git commands
 - **Goal:** operate on the active repo via `/usr/bin/git` with fixed argv + validated params:

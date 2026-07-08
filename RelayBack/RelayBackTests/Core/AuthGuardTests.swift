@@ -197,10 +197,10 @@ struct AuthGuardTests {
 
     private func makeGuard(_ clock: RelayBack.Clock,
                            commands: [ParameterizedCommand],
-                           repoTable: [String: String] = [:]) -> AuthGuard {
+                           repoConfigs: [RepoConfig] = []) -> AuthGuard {
         AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
                   clock: clock, idleTimeout: idleTimeout,
-                  parameterizedCommands: commands, repoTable: repoTable)
+                  parameterizedCommands: commands, repoConfigs: repoConfigs)
     }
 
     @Test func parameterizedCommandIsNotMatchableWithNoConfiguredSpecs() {
@@ -238,5 +238,111 @@ struct AuthGuardTests {
         var guardState = makeGuard(clock, commands: [checkoutSpec])
         #expect(guardState.authorize(fromId: allowed, text: "/checkout main") == .disarmed)
         #expect(guardState.authorize(fromId: allowed, text: "/checkout -x") == .disarmed)
+    }
+
+    // MARK: - Repo navigation & active-repo session state (S16)
+
+    private var relayback: RepoConfig {
+        RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
+                   scheme: "RelayBack", destination: "platform=macOS")
+    }
+    private var notes: RepoConfig { RepoConfig(name: "notes", root: "/Users/op/dev/Notes") }
+
+    /// A repo-scoped git command standing in for the S17 commands — runs in the active repo, no arg.
+    private var gitStatusSpec: ParameterizedCommand {
+        ParameterizedCommand(command: "/gitstatus", description: "Working tree status",
+                             executable: "/usr/bin/git", fixedArgs: ["status"],
+                             parameters: [], timeout: 20, requiresActiveRepo: true)
+    }
+
+    private func armed(_ guardState: inout AuthGuard, _ clock: TestClock) {
+        _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
+    }
+
+    @Test func cdUnknownRepoIsInvalidParameters() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/cd nope") == .invalidParameters("unknown repo"))
+        #expect(guardState.currentRepo == nil)   // nothing was selected
+    }
+
+    @Test func cdValidRepoSetsTheActiveContext() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/cd relayback") == .control(.activeRepoSet(relayback)))
+        #expect(guardState.currentRepo == relayback)
+    }
+
+    @Test func cdRequiresAnArmedSession() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback])
+        #expect(guardState.authorize(fromId: allowed, text: "/cd relayback") == .disarmed)
+    }
+
+    @Test func pwdReportsActiveRepoAndReposListsConfigured() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/pwd") == .control(.workingDirectory(nil)))
+        #expect(guardState.authorize(fromId: allowed, text: "/repos") == .control(.repoList([relayback, notes])))
+        _ = guardState.authorize(fromId: allowed, text: "/cd notes")
+        #expect(guardState.authorize(fromId: allowed, text: "/pwd") == .control(.workingDirectory(notes)))
+    }
+
+    @Test func repoScopedCommandWithNoActiveRepoIsRejected() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [gitStatusSpec], repoConfigs: [relayback])
+        armed(&guardState, clock)
+        // Armed, valid command, but no repo selected yet → the §4a precondition fails, nothing runs.
+        #expect(guardState.authorize(fromId: allowed, text: "/gitstatus") == .invalidParameters("select a repo first"))
+    }
+
+    @Test func repoScopedCommandRunsInTheActiveRepoRoot() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [gitStatusSpec], repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        let expected = Action(command: "/gitstatus", description: "Working tree status",
+                              executable: "/usr/bin/git", arguments: ["status"],
+                              timeout: 20, workingDirectory: "/Users/op/dev/RelayBack")
+        #expect(guardState.authorize(fromId: allowed, text: "/gitstatus") == .runAction(expected))
+    }
+
+    @Test func disarmClearsTheActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [gitStatusSpec], repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        #expect(guardState.currentRepo == relayback)
+
+        _ = guardState.authorize(fromId: allowed, text: "/disarm")
+        armed(&guardState, clock)                 // re-arm a fresh session
+        #expect(guardState.currentRepo == nil)    // the repo did not survive the disarm (§4a / S16)
+        #expect(guardState.authorize(fromId: allowed, text: "/gitstatus") == .invalidParameters("select a repo first"))
+    }
+
+    @Test func disarmMethodClearsTheActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        guardState.disarm()                       // the popover's "Disarm now"
+        armed(&guardState, clock)
+        #expect(guardState.currentRepo == nil)
+    }
+
+    @Test func updateReposHotReloadsAndDropsARemovedActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd notes")
+        #expect(guardState.currentRepo == notes)
+
+        guardState.updateRepos([relayback])       // `notes` removed in Settings
+        #expect(guardState.currentRepo == nil)    // the removed active repo is dropped immediately
+        // A newly-added repo becomes selectable without a restart.
+        #expect(guardState.authorize(fromId: allowed, text: "/cd relayback") == .control(.activeRepoSet(relayback)))
     }
 }

@@ -98,6 +98,13 @@ Some actions (git, xcodebuild) need a parameter or a repo context. These extend 
   - Validation failure → a `.invalidParameters(reason)` reply + audit line; nothing spawns.
 - **Working directory = named repo allowlist.** `Process.currentDirectoryURL` is set only to
   an absolute root drawn from the configured repo list. There is no free-form `cd`.
+- **Active repo is session state (S16).** The operator selects a working directory with
+  `/cd <name>` (matched exactly against the configured repo allowlist — no path from chat). The
+  selection lives with the armed session, like arm state: it is cleared on `/disarm`, on a UI
+  disarm, and when a fresh `/arm` begins a new session, so it never leaks across sessions. A
+  repo-scoped command (git/build/sim) with no active repo → `.invalidParameters("select a repo
+  first")`; nothing spawns. `/pwd` reports the active repo, `/repos` lists the configured ones —
+  both disclose only name + root, never a repo's build config.
 - **Remote ops are upstream-only.** `push`/`pull` use each repo's already-configured upstream;
   no remote name or refspec is ever accepted from chat.
 - **Builds use fixed per-repo config.** `xcodebuild` scheme + destination come from the repo's
@@ -115,6 +122,9 @@ Control commands (handled internally, always available to allowlisted users):
 - `/disarm` — drop to DISARMED.
 - `/status` — report armed/disarmed + remaining time (no action execution).
 - `/help` or `/start` — list available action commands.
+- `/repos` — list the configured repos (name + root only). Requires an armed session (S16).
+- `/cd <name>` — select the active repo for subsequent git/build/sim commands (S16).
+- `/pwd` — report the active repo (name + root), or prompt to `/cd` first (S16).
 
 Action commands: each registry `Action` exposes a `command` (e.g. `/uptime`). Sending it,
 while armed and authorized, runs the action. Registered via Telegram `setMyCommands` so

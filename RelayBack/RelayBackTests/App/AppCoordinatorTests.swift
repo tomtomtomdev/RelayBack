@@ -289,4 +289,68 @@ struct AppCoordinatorTests {
                               timeout: 20)
         #expect(h.runner.runActions == [expected])
     }
+
+    // MARK: - Repo navigation (S16): /cd, /pwd, /repos, and the "select a repo first" gate
+
+    private let relayback = RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
+                                       scheme: "RelayBack", destination: "platform=macOS")
+    private let gitStatusSpec = ParameterizedCommand(
+        command: "/gitstatus", description: "Working tree status", executable: "/usr/bin/git",
+        fixedArgs: ["status"], parameters: [], timeout: 20, requiresActiveRepo: true)
+
+    private func makeRepoHarness() -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner()
+        let audit = InMemoryAuditSink()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                                  clock: clock, idleTimeout: idleTimeout,
+                                  parameterizedCommands: [gitStatusSpec], repoConfigs: [relayback])
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         transport: transport, audit: audit, clock: clock)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner, audit: audit, clock: clock)
+    }
+
+    @Test func cdSelectsRepoRepliesAndAuditsWithoutRunning() async {
+        let h = makeRepoHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd relayback"))
+
+        #expect(h.runner.runCount == 0)                 // /cd never spawns a process
+        #expect(h.transport.sentMessages.contains { $0.text.contains("relayback") && $0.text.contains("/Users/op/dev/RelayBack") })
+        #expect(h.audit.entries.map(\.event).contains(.control("cd relayback")))
+    }
+
+    @Test func repoScopedCommandWithNoActiveRepoWarnsAndDoesNotRun() async {
+        let h = makeRepoHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/gitstatus"))
+
+        #expect(h.runner.runCount == 0)                 // §4a precondition unmet → nothing spawns
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("select a repo first") })
+        #expect(h.audit.entries.map(\.event).contains(.rejected(reason: "select a repo first")))
+    }
+
+    @Test func reposListsConfiguredWithoutLeakingBuildConfig() async {
+        let h = makeRepoHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/repos"))
+
+        #expect(h.runner.runCount == 0)
+        let reply = h.transport.sentMessages.last?.text ?? ""
+        #expect(reply.contains("relayback") && reply.contains("/Users/op/dev/RelayBack"))
+        #expect(!reply.contains("platform=macOS"))      // build config is never disclosed
+        #expect(h.audit.entries.map(\.event).contains(.control("repos")))
+    }
+
+    @Test func updateReposLetsANewlyAddedRepoBeSelected() async {
+        let h = makeHarness()   // starts with no configured repos and no parameterized commands
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd relayback"))
+        #expect(h.transport.sentMessages.contains { $0.text.contains("unknown repo") })
+
+        h.coordinator.updateRepos([relayback])          // added in Settings, hot-reloaded
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd relayback"))
+        #expect(h.audit.entries.map(\.event).contains(.control("cd relayback")))
+    }
 }

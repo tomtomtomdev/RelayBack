@@ -47,6 +47,10 @@ final class AppRuntime {
         settings.onAllowlistChanged = { [weak self] ids in
             self?.coordinator?.updateAllowlist(Set(ids))
         }
+        // S16: same pattern for the repo allowlist — an edit hot-reloads into the running guard.
+        settings.onReposChanged = { [weak self] repos in
+            self?.coordinator?.updateRepos(repos)
+        }
     }
 
     /// Begins long-polling if the app is configured (bot token + TOTP secret present). Idempotent —
@@ -71,12 +75,15 @@ final class AppRuntime {
         }
 
         let clock = SystemClock()
-        // Seed the guard from the persisted allowlist (S12) — the source of truth across launches.
+        // Seed the guard from the persisted allowlist + repos (S12/S16) — the source of truth across
+        // launches. No parameterized commands are wired yet (S17+ add the git/build/sim specs), so
+        // the repo table is seeded but only `/cd`/`/pwd`/`/repos` use it until then.
         let authGuard = AuthGuard(allowlist: Set(configStore.allowlist()),
                                   totpSecret: secret,
                                   registry: .seed,
                                   clock: clock,
-                                  idleTimeout: idleTimeout)
+                                  idleTimeout: idleTimeout,
+                                  repoConfigs: configStore.repos())
 
         let sink = MenuBarAuditSink(base: FileAuditLog(fileURL: Self.auditLogURL()), menuBar: menuBar)
         let coordinator = AppCoordinator(authGuard: authGuard,
@@ -132,6 +139,9 @@ final class AppRuntime {
             BotCommand(command: "arm", description: "Arm the session with a TOTP code"),
             BotCommand(command: "disarm", description: "Disarm the session"),
             BotCommand(command: "status", description: "Show arm status"),
+            BotCommand(command: "repos", description: "List configured repos"),
+            BotCommand(command: "cd", description: "Select the active repo"),
+            BotCommand(command: "pwd", description: "Show the active repo"),
         ]
         return controls + actions
     }

@@ -44,6 +44,27 @@ struct ParameterizedCommand: Equatable {
     let parameters: [ParamKind]
     /// Wall-clock limit for the spawned process.
     let timeout: TimeInterval
+    /// Whether this command runs in the session's **active repo** (§4a / S16). When true, the guard
+    /// requires an active repo (`/cd <repo>` first) and sets the resolved action's working directory
+    /// to that repo's root; with no active repo it returns `.invalidParameters("select a repo first")`.
+    /// The git/build/sim commands (S17–S19) set this; a repo-agnostic command leaves it false.
+    let requiresActiveRepo: Bool
+
+    init(command: String,
+         description: String,
+         executable: String,
+         fixedArgs: [String],
+         parameters: [ParamKind],
+         timeout: TimeInterval,
+         requiresActiveRepo: Bool = false) {
+        self.command = command
+        self.description = description
+        self.executable = executable
+        self.fixedArgs = fixedArgs
+        self.parameters = parameters
+        self.timeout = timeout
+        self.requiresActiveRepo = requiresActiveRepo
+    }
 }
 
 /// The outcome of resolving a command + tokens: a ready-to-run `Action`, or a short, secret-free

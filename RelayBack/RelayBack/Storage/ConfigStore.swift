@@ -21,4 +21,10 @@ protocol ConfigStore {
     func allowlist() -> [Int64]
     /// Persist the authorization allowlist, replacing any previous value.
     func setAllowlist(_ ids: [Int64])
+    /// The persisted repo allowlist (§4a working-directory allowlist, S16); empty if none is stored.
+    /// Fails closed like the allowlist: a missing / unreadable value reads back as empty, so an
+    /// absent config can only ever *narrow* what the dev-workflow actions can reach, never widen it.
+    func repos() -> [RepoConfig]
+    /// Persist the repo allowlist, replacing any previous value.
+    func setRepos(_ repos: [RepoConfig])
 }

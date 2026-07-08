@@ -14,12 +14,13 @@ import Testing
 struct SettingsPaneTests {
 
     @Test func listsAllPanesInSidebarOrder() {
-        #expect(SettingsPane.allCases == [.connection, .allowlist, .security, .audit, .general])
+        #expect(SettingsPane.allCases == [.connection, .allowlist, .repos, .security, .audit, .general])
     }
 
     @Test func mapsEachPaneToItsHandoffTitle() {
         #expect(SettingsPane.connection.title == "Connection")
         #expect(SettingsPane.allowlist.title == "Allowlist")
+        #expect(SettingsPane.repos.title == "Repos")
         #expect(SettingsPane.security.title == "Security")
         #expect(SettingsPane.audit.title == "Audit")
         #expect(SettingsPane.general.title == "General")
@@ -28,6 +29,7 @@ struct SettingsPaneTests {
     @Test func mapsEachPaneToAnSFSymbol() {
         #expect(SettingsPane.connection.systemImage == "wifi")
         #expect(SettingsPane.allowlist.systemImage == "person.2")
+        #expect(SettingsPane.repos.systemImage == "folder")
         #expect(SettingsPane.security.systemImage == "checkmark.shield")
         #expect(SettingsPane.audit.systemImage == "doc.text")
         #expect(SettingsPane.general.systemImage == "gearshape")

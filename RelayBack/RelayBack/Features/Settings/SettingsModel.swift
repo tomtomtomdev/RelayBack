@@ -42,6 +42,16 @@ final class SettingsModel {
     /// the running `AuthGuard` (S12). Not set in tests that only assert persistence.
     var onAllowlistChanged: (([Int64]) -> Void)?
 
+    /// The configured repo allowlist being edited (§4a / S16), loaded from and persisted through
+    /// the `ConfigStore`. Every change is pushed to `onReposChanged` so the running guard hot-reloads.
+    private(set) var repos: [RepoConfig]
+    /// A short message surfaced under the repos section when an add is rejected (missing fields or a
+    /// duplicate name), so a rejected repo is never silently dropped. Cleared on a successful add.
+    private(set) var repoError: String?
+    /// Called after every repo change with the new list, so the composition root can hot-reload the
+    /// running `AuthGuard` (S16), mirroring `onAllowlistChanged`.
+    var onReposChanged: (([RepoConfig]) -> Void)?
+
     /// Live transport reachability shown in the Connection pane (S13f). The composition root
     /// (`AppRuntime`) probes the bot at startup and pushes the result here; the pane renders it via
     /// `ConnectionStatePresentation`. Starts `.connecting` until the first probe resolves.
@@ -79,6 +89,7 @@ final class SettingsModel {
         self.account = account
         self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
         self.allowlist = AllowlistDraft(configStore.allowlist())
+        self.repos = configStore.repos()
         self.botToken = (try? store.botToken()) ?? ""
         self.totpSecret = (try? store.totpSecret()) ?? nil
         self.launchAtLogin = loginItem.isEnabled
@@ -151,6 +162,50 @@ final class SettingsModel {
     private func persistAllowlist() {
         configStore.setAllowlist(allowlist.ids)
         onAllowlistChanged?(allowlist.ids)
+    }
+
+    // MARK: - Repos (§4a working-directory allowlist, S16)
+
+    /// Validates and adds a repo; returns whether it was added. A repo needs a non-empty name and
+    /// root, and its name must be unique. Optional build-config fields are trimmed to nil when blank.
+    /// Persists and hot-reloads only on a real change.
+    @discardableResult
+    func addRepo(name: String, root: String, scheme: String? = nil,
+                 destination: String? = nil, simulatorDevice: String? = nil) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = root.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !root.isEmpty else {
+            repoError = "A repo needs a name and an absolute path."
+            return false
+        }
+        guard !repos.contains(where: { $0.name == name }) else {
+            repoError = "A repo named “\(name)” already exists."
+            return false
+        }
+        repos.append(RepoConfig(name: name, root: root,
+                                scheme: Self.trimmedOrNil(scheme),
+                                destination: Self.trimmedOrNil(destination),
+                                simulatorDevice: Self.trimmedOrNil(simulatorDevice)))
+        repoError = nil
+        persistRepos()
+        return true
+    }
+
+    func removeRepo(name: String) {
+        let before = repos
+        repos.removeAll { $0.name == name }
+        if repos != before { persistRepos() }
+    }
+
+    /// Writes the current repos to the config store and notifies the running guard (S16).
+    private func persistRepos() {
+        configStore.setRepos(repos)
+        onReposChanged?(repos)
+    }
+
+    private static func trimmedOrNil(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty ?? true) ? nil : trimmed
     }
 
     // MARK: - TOTP secret

@@ -37,6 +37,10 @@ enum ControlResult: Equatable {
     case armRejected        // missing / invalid TOTP → still disarmed
     case disarmAccepted     // session dropped to disarmed
     case status(isArmed: Bool)
+    // S16 — repo navigation (never executes a process; all report/mutate session state):
+    case activeRepoSet(RepoConfig)      // /cd <repo> → active repo is now this one
+    case workingDirectory(RepoConfig?)  // /pwd → the active repo (nil when none selected)
+    case repoList([RepoConfig])         // /repos → the configured repo allowlist
 }
 
 struct AuthGuard {
@@ -52,13 +56,25 @@ struct AuthGuard {
     /// resolved to an `Action` by `ParameterizedActionResolver`.
     private let parameterizedCommands: [ParameterizedCommand]
 
-    /// Maps a configured repo name to its absolute root, for a `.repoName` parameter. Empty until
-    /// S16 supplies the persisted repo allowlist. No path ever comes from chat (§4a).
-    private let repoTable: [String: String]
+    /// The configured repo allowlist (§4a working-directory allowlist, S16). Empty in v1 until the
+    /// operator adds repos in Settings. `/cd <name>` selects one; git/build/sim commands run in the
+    /// selected repo's root. No path ever comes from chat — a name is matched exactly against this.
+    /// `var` so a Settings edit can hot-reload it (`updateRepos`).
+    private var repoConfigs: [RepoConfig]
+
+    /// Name → absolute root, derived from `repoConfigs`, for a resolver `.repoName` parameter (S15).
+    private var repoTable: [String: String] {
+        Dictionary(repoConfigs.map { ($0.name, $0.root) }, uniquingKeysWith: { first, _ in first })
+    }
 
     /// End of the armed window; nil means never armed. Armed iff `clock.now < armedUntil`.
     /// Expiry is derived lazily from this instant — no background timer needed (pure type).
     private var armedUntil: Date?
+
+    /// The session's active repo (§4a / S16), selected by `/cd`. Lives with the armed session:
+    /// cleared on `/disarm`, on `disarm()`, and when a fresh `/arm` starts a new session, so it
+    /// never leaks across sessions. Only meaningful while armed (see `currentRepo`).
+    private var activeRepo: RepoConfig?
 
     init(allowlist: Set<Int64>,
          totpSecret: Data,
@@ -66,14 +82,14 @@ struct AuthGuard {
          clock: Clock,
          idleTimeout: TimeInterval,
          parameterizedCommands: [ParameterizedCommand] = [],
-         repoTable: [String: String] = [:]) {
+         repoConfigs: [RepoConfig] = []) {
         self.allowlist = allowlist
         self.totpSecret = totpSecret
         self.registry = registry
         self.clock = clock
         self.idleTimeout = idleTimeout
         self.parameterizedCommands = parameterizedCommands
-        self.repoTable = repoTable
+        self.repoConfigs = repoConfigs
     }
 
     /// Replaces the authorization allowlist at runtime (S12 — hot-reload from Settings). Arm state
@@ -84,10 +100,22 @@ struct AuthGuard {
         allowlist = ids
     }
 
+    /// Replaces the configured repo allowlist at runtime (S16 — hot-reload from Settings), mirroring
+    /// `updateAllowlist`. If the active repo is no longer configured it is dropped immediately, so a
+    /// removed repo can't keep being operated on (§4a). Arm state is preserved.
+    mutating func updateRepos(_ repos: [RepoConfig]) {
+        repoConfigs = repos
+        if let active = activeRepo, !repos.contains(where: { $0.name == active.name }) {
+            activeRepo = nil
+        }
+    }
+
     /// Drops the session to disarmed immediately (S13b — the popover's "Disarm now" button). Same
     /// effect as a `/disarm` message, without routing through `authorize`; identity is not involved.
+    /// Clears the active repo too — it lives with the session (§4a / S16).
     mutating func disarm() {
         armedUntil = nil
+        activeRepo = nil
     }
 
     /// True while the armed window is still open.
@@ -95,6 +123,10 @@ struct AuthGuard {
         guard let armedUntil else { return false }
         return clock.now < armedUntil
     }
+
+    /// The active repo, but only while armed — so a session that has idled out (lazy expiry) never
+    /// reports a stale repo. Readers already gate on `isArmed` first, so this is belt-and-suspenders.
+    var currentRepo: RepoConfig? { isArmed ? activeRepo : nil }
 
     /// Seconds left in the armed window, clamped to 0 (never negative); 0 when disarmed.
     var remainingArmedTime: TimeInterval {
@@ -116,9 +148,18 @@ struct AuthGuard {
             return .control(handleArm(text))
         case "/disarm":
             armedUntil = nil
+            activeRepo = nil                              // the active repo lives with the session
             return .control(.disarmAccepted)
         case "/status":
             return .control(.status(isArmed: isArmed))   // read-only: never touches arm state
+        case "/cd":
+            return handleCd(text)
+        case "/pwd":
+            guard isArmed else { return .disarmed }       // repo context lives with the armed session
+            return .control(.workingDirectory(currentRepo))
+        case "/repos":
+            guard isArmed else { return .disarmed }
+            return .control(.repoList(repoConfigs))
         default:
             if let action = registry.match(text) {
                 guard isArmed else { return .disarmed }    // I2: actions run only while armed
@@ -126,23 +167,54 @@ struct AuthGuard {
                 return .runAction(action)
             }
             if let spec = parameterizedCommands.first(where: { $0.command.lowercased() == token }) {
-                // I2: gate on arm state BEFORE validating, so a disarmed operator is told to arm
-                // rather than shown a validation result.
-                guard isArmed else { return .disarmed }
-                let argTokens = operatorArguments(in: text)
-                switch ParameterizedActionResolver.resolve(spec, argTokens: argTokens, repoTable: repoTable) {
-                case let .ok(action):
-                    extendArmedWindow()
-                    return .runAction(action)
-                case let .invalid(reason):
-                    return .invalidParameters(reason)      // §4a: nothing spawns on bad input
-                }
+                return resolveParameterized(spec, text: text)
             }
             return .unknownCommand
         }
     }
 
     // MARK: - Private
+
+    /// Selects the session's active repo (§4a / S16). Gated on arm state first (I2) so a disarmed
+    /// operator is told to arm rather than shown which repo names exist. The name is matched exactly
+    /// against the configured allowlist — no path comes from chat, so traversal is impossible.
+    private mutating func handleCd(_ text: String) -> Decision {
+        guard isArmed else { return .disarmed }
+        guard let name = operatorArguments(in: text).first else {
+            return .invalidParameters("usage: /cd <repo>")
+        }
+        guard let repo = repoConfigs.first(where: { $0.name == name }) else {
+            return .invalidParameters("unknown repo")
+        }
+        activeRepo = repo
+        extendArmedWindow()                              // an intentional session action resets idle
+        return .control(.activeRepoSet(repo))
+    }
+
+    /// Resolves a matched parameterized dev-workflow command to a `.runAction` or `.invalidParameters`.
+    /// Arm gate first (I2), then — for a repo-scoped command — the active-repo precondition, then the
+    /// per-parameter validation. The resolved action runs in the active repo's root (§4a).
+    private mutating func resolveParameterized(_ spec: ParameterizedCommand, text: String) -> Decision {
+        // I2: gate on arm state BEFORE validating, so a disarmed operator is told to arm rather
+        // than shown a validation result.
+        guard isArmed else { return .disarmed }
+
+        var workingDirectory: String?
+        if spec.requiresActiveRepo {
+            guard let repo = currentRepo else { return .invalidParameters("select a repo first") }
+            workingDirectory = repo.root
+        }
+
+        let argTokens = operatorArguments(in: text)
+        switch ParameterizedActionResolver.resolve(spec, argTokens: argTokens, repoTable: repoTable) {
+        case let .ok(action):
+            extendArmedWindow()
+            // §4a: a repo-scoped command runs in the active repo's root (drawn only from config).
+            return .runAction(workingDirectory.map(action.withWorkingDirectory) ?? action)
+        case let .invalid(reason):
+            return .invalidParameters(reason)            // §4a: nothing spawns on bad input
+        }
+    }
 
     /// The operator-supplied argument for a parameterized command: everything after the command
     /// token, as a single trimmed token (empty if none), preserving inner spacing so a multi-word
@@ -157,11 +229,13 @@ struct AuthGuard {
     }
 
     private mutating func handleArm(_ text: String) -> ControlResult {
+        let wasArmed = isArmed
         let parts = text.split(whereSeparator: \.isWhitespace)
         guard parts.count >= 2 else { return .armRejected }         // "/arm" with no code
         guard TOTP.validate(String(parts[1]), secret: totpSecret, at: clock.now) else {
             return .armRejected
         }
+        if !wasArmed { activeRepo = nil }   // arming a fresh session starts with no active repo (§4a)
         extendArmedWindow()
         return .armAccepted
     }

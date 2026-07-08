@@ -13,6 +13,7 @@ import Foundation
 enum SettingsPane: String, CaseIterable, Identifiable, Equatable {
     case connection
     case allowlist
+    case repos
     case security
     case audit
     case general
@@ -24,6 +25,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .connection: return "Connection"
         case .allowlist:  return "Allowlist"
+        case .repos:      return "Repos"
         case .security:   return "Security"
         case .audit:      return "Audit"
         case .general:    return "General"
@@ -35,6 +37,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .connection: return "wifi"
         case .allowlist:  return "person.2"
+        case .repos:      return "folder"
         case .security:   return "checkmark.shield"
         case .audit:      return "doc.text"
         case .general:    return "gearshape"

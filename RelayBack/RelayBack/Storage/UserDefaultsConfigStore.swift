@@ -16,6 +16,7 @@ import Foundation
 struct UserDefaultsConfigStore: ConfigStore {
     private let defaults: UserDefaults
     private let key = "allowlist"
+    private let reposKey = "repos"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -27,5 +28,18 @@ struct UserDefaultsConfigStore: ConfigStore {
 
     func setAllowlist(_ ids: [Int64]) {
         defaults.set(ids.map(Int.init), forKey: key)
+    }
+
+    // Repos carry optional fields, so they are stored as JSON (not a plist array). Fails closed:
+    // a missing or undecodable blob reads back as empty (§4a / S16).
+    func repos() -> [RepoConfig] {
+        guard let data = defaults.data(forKey: reposKey),
+              let repos = try? JSONDecoder().decode([RepoConfig].self, from: data) else { return [] }
+        return repos
+    }
+
+    func setRepos(_ repos: [RepoConfig]) {
+        guard let data = try? JSONEncoder().encode(repos) else { return }
+        defaults.set(data, forKey: reposKey)
     }
 }

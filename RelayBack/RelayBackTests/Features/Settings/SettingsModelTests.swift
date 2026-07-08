@@ -144,6 +144,59 @@ struct SettingsModelTests {
         #expect(notifyCount == 0)                // no change → no persist, no hot-reload
     }
 
+    // MARK: - Repos (S16 — ConfigStore-backed, notifies the live guard)
+
+    @Test func loadsReposFromConfigStore() {
+        let repos = [RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack")]
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(repos: repos))
+        #expect(model.repos == repos)
+    }
+
+    @Test func addRepoPersistsAndNotifies() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: [RepoConfig]?
+        model.onReposChanged = { notified = $0 }
+
+        #expect(model.addRepo(name: "relayback", root: "/Users/op/dev/RelayBack", scheme: "RelayBack"))
+        let expected = [RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack", scheme: "RelayBack")]
+        #expect(config.repos() == expected)     // persisted for next launch
+        #expect(notified == expected)           // pushed to the running guard (hot-reload)
+        #expect(model.repoError == nil)
+    }
+
+    @Test func removeRepoPersistsAndNotifies() {
+        let repos = [RepoConfig(name: "a", root: "/a"), RepoConfig(name: "b", root: "/b")]
+        let config = InMemoryConfigStore(repos: repos)
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: [RepoConfig]?
+        model.onReposChanged = { notified = $0 }
+
+        model.removeRepo(name: "a")
+        #expect(config.repos() == [RepoConfig(name: "b", root: "/b")])
+        #expect(notified == [RepoConfig(name: "b", root: "/b")])
+    }
+
+    @Test func addRepoRejectsDuplicateNameWithoutPersistingOrNotifying() {
+        let config = InMemoryConfigStore(repos: [RepoConfig(name: "relayback", root: "/x")])
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notifyCount = 0
+        model.onReposChanged = { _ in notifyCount += 1 }
+
+        #expect(model.addRepo(name: "relayback", root: "/y") == false)
+        #expect(model.repoError != nil)
+        #expect(notifyCount == 0)               // no change → no persist, no hot-reload
+        #expect(config.repos() == [RepoConfig(name: "relayback", root: "/x")])   // unchanged
+    }
+
+    @Test func addRepoRejectsMissingNameOrRoot() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        #expect(model.addRepo(name: "   ", root: "/x") == false)
+        #expect(model.addRepo(name: "x", root: "  ") == false)
+        #expect(model.repos.isEmpty)
+        #expect(model.repoError != nil)
+    }
+
     @Test func noSecretMeansNoQR() {
         let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
         #expect(model.hasSecret == false)

@@ -63,6 +63,12 @@ final class AppCoordinator {
         authGuard.updateAllowlist(ids)
     }
 
+    /// Applies a runtime repo-allowlist change to the live guard (S16), mirroring `updateAllowlist`.
+    /// A repo added/removed in Settings takes effect immediately; a removed active repo is dropped.
+    func updateRepos(_ repos: [RepoConfig]) {
+        authGuard.updateRepos(repos)
+    }
+
     /// Disarms the live session on demand (S13b — the popover's "Disarm now" button). A subsequent
     /// action is blocked until the operator re-arms via TOTP (invariant I2).
     func disarm() {
@@ -122,6 +128,15 @@ final class AppCoordinator {
         case let .status(isArmed):
             await reply(chatId, "Status: \(isArmed ? "armed" : "disarmed").")
             record(fromId: fromId, event: .control("status armed=\(isArmed)"))
+        case let .activeRepoSet(repo):
+            await reply(chatId, "📁 Active repo: \(repo.name)\n\(repo.root)")
+            record(fromId: fromId, event: .control("cd \(repo.name)"))
+        case let .workingDirectory(repo):
+            await reply(chatId, RepoListPresentation.pwd(repo))
+            record(fromId: fromId, event: .control("pwd"))
+        case let .repoList(repos):
+            await reply(chatId, RepoListPresentation.list(repos))
+            record(fromId: fromId, event: .control("repos"))
         }
     }
 

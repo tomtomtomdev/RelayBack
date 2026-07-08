@@ -42,4 +42,12 @@ struct Action: Equatable {
         self.timeout = timeout
         self.workingDirectory = workingDirectory
     }
+
+    /// Returns a copy with `workingDirectory` set — used by `AuthGuard` to run a dev-workflow
+    /// action in the session's active repo root (§4a / S16). The root is drawn only from the
+    /// configured repo allowlist, never from operator text.
+    func withWorkingDirectory(_ directory: String) -> Action {
+        Action(command: command, description: description, executable: executable,
+               arguments: arguments, timeout: timeout, workingDirectory: directory)
+    }
 }

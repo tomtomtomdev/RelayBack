@@ -13,11 +13,16 @@ import Foundation
 
 final class InMemoryConfigStore: ConfigStore {
     private var ids: [Int64]
+    private var repoConfigs: [RepoConfig]
 
-    init(allowlist: [Int64] = []) {
+    init(allowlist: [Int64] = [], repos: [RepoConfig] = []) {
         ids = allowlist
+        repoConfigs = repos
     }
 
     func allowlist() -> [Int64] { ids }
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
+
+    func repos() -> [RepoConfig] { repoConfigs }
+    func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
 }

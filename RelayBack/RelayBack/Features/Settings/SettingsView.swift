@@ -88,6 +88,7 @@ struct SettingsView: View {
         switch selection {
         case .connection: connectionPane
         case .allowlist:  allowlistPane
+        case .repos:      reposPane
         case .security:   securityPane
         case .audit:      auditPane
         case .general:    generalPane
@@ -342,6 +343,106 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Repos pane (S16 — the §4a working-directory allowlist)
+
+    @State private var newRepoName = ""
+    @State private var newRepoRoot = ""
+    @State private var newRepoScheme = ""
+    @State private var newRepoDestination = ""
+    @State private var newRepoSimulator = ""
+
+    private var reposPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                paneHeader("Repos",
+                           detail: "Named working directories the dev-workflow commands run in. Select one from Telegram with /cd <name>; git/build/sim run there.")
+
+                VStack(spacing: 8) {
+                    ForEach(model.repos) { repo in
+                        repoRow(repo)
+                    }
+                }
+
+                if model.repos.isEmpty {
+                    Text("No repos yet — add one below, then /cd <name> from your phone.")
+                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                }
+
+                addRepoForm
+
+                if let error = model.repoError {
+                    Text(error).font(.caption).foregroundStyle(Theme.danger)
+                }
+            }
+            .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+        }
+    }
+
+    private func repoRow(_ repo: RepoConfig) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "folder.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(repo.name)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(repo.root)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+                if let scheme = repo.scheme {
+                    Text("scheme: \(scheme)")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Remove") { model.removeRepo(name: repo.name) }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.danger)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
+    private var addRepoForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ADD REPO")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6B7280))
+                .kerning(0.5)
+            repoField("Name (e.g. relayback)", text: $newRepoName)
+            repoField("Absolute path (e.g. /Users/you/dev/RelayBack)", text: $newRepoRoot)
+            repoField("Scheme — optional (for /build)", text: $newRepoScheme)
+            repoField("Destination — optional (for /build)", text: $newRepoDestination)
+            repoField("Simulator device — optional (for /sim)", text: $newRepoSimulator)
+            Button("Add repo") { addRepoFromForm() }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(newRepoName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || newRepoRoot.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.top, 4)
+    }
+
+    private func repoField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13, design: .monospaced))
+            .padding(.horizontal, 11).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+    }
+
+    private func addRepoFromForm() {
+        guard model.addRepo(name: newRepoName, root: newRepoRoot,
+                            scheme: newRepoScheme, destination: newRepoDestination,
+                            simulatorDevice: newRepoSimulator) else { return }
+        newRepoName = ""; newRepoRoot = ""; newRepoScheme = ""
+        newRepoDestination = ""; newRepoSimulator = ""
+    }
+
     // MARK: - General pane (S13e)
 
     private var generalPane: some View {
@@ -539,6 +640,17 @@ private struct SecondaryButtonStyle: ButtonStyle {
     return SettingsView(model: model, initialPane: .audit)
 }
 
+#Preview("Repos") {
+    SettingsView(model: SettingsModel(
+        store: PreviewSecretStore(),
+        configStore: PreviewConfigStore(repos: [
+            RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
+                       scheme: "RelayBack", destination: "platform=macOS"),
+            RepoConfig(name: "notes", root: "/Users/op/dev/Notes"),
+        ])
+    ), initialPane: .repos)
+}
+
 #Preview("Connection — connected") {
     let model = SettingsModel(store: PreviewSecretStore())
     model.connectionState = .connected(botUsername: "relayback_bot")
@@ -562,12 +674,15 @@ private final class PreviewSecretStore: SecretStore {
     func setTOTPSecret(_ secret: Data?) throws { self.secret = secret }
 }
 
-/// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist.
+/// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist / repos.
 private final class PreviewConfigStore: ConfigStore {
     private var ids: [Int64]
-    init(allowlist: [Int64] = []) { ids = allowlist }
+    private var repoConfigs: [RepoConfig]
+    init(allowlist: [Int64] = [], repos: [RepoConfig] = []) { ids = allowlist; repoConfigs = repos }
     func allowlist() -> [Int64] { ids }
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
+    func repos() -> [RepoConfig] { repoConfigs }
+    func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
 }
 
 /// A throwaway `AuditReading` so the Audit-pane preview renders a representative, color-coded table.

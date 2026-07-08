@@ -47,4 +47,47 @@ struct ConfigStoreTests {
         store.setAllowlist([5, 6_000_000_000])   // includes an id beyond Int32 range
         #expect(store.allowlist() == [5, 6_000_000_000])
     }
+
+    // MARK: - Repos (S16 — the §4a working-directory allowlist)
+
+    @Test func missingReposIsEmpty() {
+        let store = InMemoryConfigStore()
+        #expect(store.repos() == [])
+    }
+
+    @Test func reposRoundTrip() {
+        let store = InMemoryConfigStore()
+        let repos = [
+            RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
+                       scheme: "RelayBack", destination: "platform=macOS"),
+            RepoConfig(name: "notes", root: "/Users/op/dev/Notes"),
+        ]
+        store.setRepos(repos)
+        #expect(store.repos() == repos)
+    }
+
+    @Test func setReposOverwritesLastWins() {
+        let store = InMemoryConfigStore(repos: [RepoConfig(name: "a", root: "/a")])
+        store.setRepos([RepoConfig(name: "b", root: "/b")])
+        #expect(store.repos() == [RepoConfig(name: "b", root: "/b")])
+    }
+
+    // Real impl, isolated suite — repos persist as JSON and round-trip (incl. the optional fields).
+    @Test func userDefaultsStoreRoundTripsReposInIsolatedSuite() throws {
+        let suite = "com.RelayBack.tests.config.repos"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = UserDefaultsConfigStore(defaults: defaults)
+        #expect(store.repos() == [])
+        let repos = [
+            RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
+                       scheme: "RelayBack", destination: "platform=macOS",
+                       simulatorDevice: "iPhone 15"),
+            RepoConfig(name: "notes", root: "/Users/op/dev/Notes"),
+        ]
+        store.setRepos(repos)
+        #expect(store.repos() == repos)
+    }
 }

@@ -5,6 +5,43 @@
 
 ## Current state
 
+- **S16 done — repo config + active-repo selection (`/cd`/`/pwd`/`/repos`).** The dev-workflow epic
+  now has a persisted repo allowlist and a session active-repo, and the first user-facing
+  parameterized commands are matchable. New pieces:
+  - **`Core/RepoConfig`** (`name`, `root`, optional `scheme`/`destination`/`simulatorDevice`;
+    `Equatable`+`Codable`+`Identifiable`). Persisted (non-secret) via two new `ConfigStore` methods
+    `repos()`/`setRepos(_:)` — `UserDefaultsConfigStore` stores them as **JSON** (optional fields), and
+    **fails closed** (missing/undecodable → `[]`, like the allowlist). `InMemoryConfigStore`/preview
+    store updated.
+  - **`AuthGuard` active-repo session state.** New injected `repoConfigs: [RepoConfig] = []` (replaces
+    the S15 `repoTable:` init param — the guard now derives the name→root table internally) and a
+    private `activeRepo`. Three new control commands (all require an armed session — the repo context
+    lives with the session): **`/cd <name>`** (exact-match a configured name → set active repo, or
+    `.invalidParameters("unknown repo")`), **`/pwd`** (`.control(.workingDirectory(currentRepo))`),
+    **`/repos`** (`.control(.repoList(repoConfigs))`). New `ControlResult` cases carry `RepoConfig`.
+  - **`requiresActiveRepo` on `ParameterizedCommand`** (default false). A repo-scoped command (S17+
+    git/build/sim will set it) with **no active repo** → `.invalidParameters("select a repo first")`
+    *before* param validation; with one, the resolver's `Action` is rebuilt via new
+    `Action.withWorkingDirectory(_:)` so the process runs in the active repo's root (§4a).
+  - **Active repo cleared on session end (§4a):** `/disarm`, the UI `disarm()`, and a **fresh** `/arm`
+    all clear it; `currentRepo` also returns nil when not armed, so an idled-out session never reports
+    a stale repo. `updateRepos(_:)` hot-reloads the guard (mirrors `updateAllowlist`) and drops the
+    active repo if it was removed.
+  - **Pure `Core/RepoListPresentation`** (`list`/`pwd`) — the `/repos` + `/pwd` reply text discloses
+    **only name + root**, never a repo's build config (asserted). `AppCoordinator` maps the new control
+    results to replies + `.control("cd <name>"/"pwd"/"repos")` audit lines, and gained `updateRepos`.
+  - **Settings**: new **Repos** pane (`SettingsPane.repos`, "folder" icon) with a repo list + add-form;
+    `SettingsModel` gained `repos` + `addRepo(...)`/`removeRepo(name:)` + `onReposChanged` (persist +
+    hot-reload, same shape as the allowlist). `AppRuntime` seeds the guard from `configStore.repos()`,
+    wires `onReposChanged → coordinator.updateRepos`, and advertises `/cd`/`/pwd`/`/repos` via
+    `setMyCommands`.
+  - **No parameterized git/build/sim spec is wired in production yet** — `parameterizedCommands` stays
+    empty until S17. Only `/cd`/`/pwd`/`/repos` are matchable now (they're hardcoded control commands).
+- ✅ **S16 verified green on macOS** (this session): full `RelayBackTests` suite = **253 tests /
+  33 suites** passing (added `RepoListPresentationTests` (5) + `ConfigStoreTests` repos (4) +
+  `AuthGuardTests` repo/active-repo (9) + `AppCoordinatorTests` repo commands (4) + `SettingsModelTests`
+  repos (5); `SettingsPaneTests` updated for the new pane). App builds clean; the Repos-pane Preview
+  renders the list + add form.
 - **S15 done — parameterized-action foundation (dev-workflow epic begun).** The *mechanism* for
   §4a validated-parameter actions is in place and fully test-exercised, but **inert in production**:
   no new bot command is matchable (proven). New pieces:
@@ -235,15 +272,15 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S16** — Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`). S15 landed
-  the validated-argv foundation (resolver + validators + `Action.workingDirectory` + the
-  `.invalidParameters` decision), but production wires **no** `ParameterizedCommand` specs and an
-  **empty** `repoTable`, so nothing new is matchable yet. S16 adds a persisted `RepoConfig` (via
-  `ConfigStore`), a Settings repo editor, session **active-repo** state, and the first user-facing
-  parameterized commands (`/cd <repo>`, `/pwd`, `/repos`) — feeding the real repo table into the
-  guard and clearing active-repo on disarm. See PLAN S16. Other optional follow-ups (not blocking
-  the epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; a live
-  per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
+- **Next slice:** **S17** — Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/
+  `/commit`). S16 landed the repo allowlist + active-repo session + the `requiresActiveRepo`
+  precondition, so S17 just appends `ParameterizedCommand` specs for `/usr/bin/git` (each
+  `requiresActiveRepo: true`, fixed argv + validated params) to the production `parameterizedCommands`
+  set in `AppRuntime`, plus a real smoke test against a throwaway git repo. See PLAN S17. The
+  resolver/validator/active-repo mechanism is already tested; S17 is mostly wiring + the git smoke.
+  Other optional follow-ups (not blocking the epic): per-second live menu-bar countdown; a
+  real-Keychain/UserDefaults launch smoke; a live per-poll connection indicator reading the S14
+  `connection.log`; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -278,7 +315,7 @@
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
 | —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
 | S15  | Parameterized-action foundation *(dev-workflow epic)* | ✅ done |
-| S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ☐ not started |
+| S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ✅ done |
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ☐ not started |
 | S18  | xcodebuild (`/build`) | ☐ not started |
 | S19  | Simulator run (`/sim`) | ☐ not started |
@@ -293,6 +330,45 @@ slice per session._
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S16: **Active repo is session state selected by `/cd`, not a per-command `.repoName`
+  parameter — this sharpens §4a.** §4a framed the repo as a per-action validated parameter (the S15
+  `.repoName` `ParamKind`, which stays available but is now inert). Instead the operator sets an
+  **active repo** once with `/cd <name>`, and repo-scoped commands read it from the session. Why: the
+  git/build/sim commands (S17–S19) take *no* repo argument — a phone operator sets context once, then
+  runs many commands — so a per-command repo token would be noise. The guard injects the active repo's
+  root as the resolved action's `workingDirectory` (new `Action.withWorkingDirectory`). SPEC §4a/§5
+  updated to describe the active-repo model + the three commands.
+- 2026-07-08 — S16: **`/cd`/`/pwd`/`/repos` require an armed session; the active repo lives with the
+  session and is cleared on end.** They're hardcoded control commands (like `/arm`/`/status`), not
+  `ParameterizedCommand`s, since they mutate/report session state rather than spawn. All three gate on
+  `isArmed` first (a disarmed operator is told to arm, never shown which repos exist — I2-adjacent).
+  The active repo is cleared on `/disarm`, on the UI `disarm()`, and on a **fresh** `/arm` (captured
+  via `wasArmed` before extending); `currentRepo` also returns nil when not armed, so a lazily-expired
+  session can't report a stale repo. Rationale: a repo context must not survive across sessions.
+- 2026-07-08 — S16: **`requiresActiveRepo` precedes parameter validation; "select a repo first" is a
+  precondition, not a validation error.** A repo-scoped `ParameterizedCommand` (S17+ sets the flag)
+  with no active repo returns `.invalidParameters("select a repo first")` *before* resolving params —
+  the precondition is checked first so the operator gets the actionable message even if a param would
+  also be invalid. The guard now derives its `repoTable` from the injected `repoConfigs` (the S15
+  `repoTable:` init param was replaced), unifying the repo source; the resolver signature is unchanged.
+- 2026-07-08 — S16: **`RepoConfig` is `Codable`, persisted as JSON in UserDefaults; repos fail closed
+  like the allowlist.** Optional build-config fields make a plist array awkward, so `setRepos` encodes
+  JSON to a `data` key and `repos()` returns `[]` on a missing/undecodable blob — an absent/corrupt
+  repo config can only narrow what the dev commands reach (§4a), never widen it. `ConfigStore` stays
+  non-throwing (best-effort, like the allowlist).
+- 2026-07-08 — S16: **`/repos` and `/pwd` disclose only name + root — pure `RepoListPresentation`
+  enforces it.** A repo's `scheme`/`destination`/`simulatorDevice` are internal build config and are
+  never echoed to chat; the reply text is a pure, tested function so the no-leak rule is asserted
+  (sentinel-string tests), not left to view glue. `/pwd`'s "current branch" line (PLAN's wording) is
+  deferred to **S17** — it needs a real `git` call, which arrives with the git commands; S16's `/pwd`
+  reports name + root.
+- 2026-07-08 — S16: **Repos edits hot-reload into the running guard (parity with the allowlist), and
+  the repo allowlist is ids-model-simple.** `SettingsModel.addRepo`/`removeRepo` persist via
+  `ConfigStore` and fire `onReposChanged`, which `AppRuntime` wires to `AppCoordinator.updateRepos`
+  → `AuthGuard.updateRepos` (drops a removed active repo immediately). Not strictly required by PLAN
+  (repos aren't a security-revocation concern like ids), but it avoids a confusing "added a repo,
+  `/cd` still fails until restart" gap and reuses the established S12 pattern. The Settings **Repos**
+  pane (new `SettingsPane.repos`) is thin/Preview-verified glue; the tested surface is `SettingsModel`.
 - 2026-07-08 — S15: **The resolver is data-driven over a `[ParameterizedCommand]` spec set, and
   AuthGuard routes to it — production wires an empty set.** PLAN sketched the resolver as
   `(command, argTokens, repoTable) -> …` (implying it knows commands internally). Instead a
