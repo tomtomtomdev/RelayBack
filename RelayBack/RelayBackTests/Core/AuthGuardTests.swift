@@ -185,4 +185,58 @@ struct AuthGuardTests {
         #expect(guardState.authorize(fromId: allowed, text: "/Status") == .control(.status(isArmed: true)))
         #expect(guardState.authorize(fromId: allowed, text: "/DisArm") == .control(.disarmAccepted))
     }
+
+    // MARK: - Parameterized-action routing (S15 — mechanism present, inert in production)
+
+    // A representative spec standing in for the S17+ git commands; only tests inject it.
+    private var checkoutSpec: ParameterizedCommand {
+        ParameterizedCommand(command: "/checkout", description: "Switch branch",
+                             executable: "/usr/bin/git", fixedArgs: ["checkout", "--"],
+                             parameters: [.branch], timeout: 20)
+    }
+
+    private func makeGuard(_ clock: RelayBack.Clock,
+                           commands: [ParameterizedCommand],
+                           repoTable: [String: String] = [:]) -> AuthGuard {
+        AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                  clock: clock, idleTimeout: idleTimeout,
+                  parameterizedCommands: commands, repoTable: repoTable)
+    }
+
+    @Test func parameterizedCommandIsNotMatchableWithNoConfiguredSpecs() {
+        // S15 done-when: the mechanism exists but no new command resolves in production (empty
+        // spec set), so a parameterized-looking command is just unknown — nothing new is matchable.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)   // default init: no parameterized commands
+        _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
+        #expect(guardState.authorize(fromId: allowed, text: "/checkout main") == .unknownCommand)
+    }
+
+    @Test func armedValidParameterResolvesToRunAction() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [checkoutSpec])
+        _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
+        let expected = Action(command: "/checkout", description: "Switch branch",
+                              executable: "/usr/bin/git", arguments: ["checkout", "--", "main"],
+                              timeout: 20)
+        #expect(guardState.authorize(fromId: allowed, text: "/checkout main") == .runAction(expected))
+    }
+
+    @Test func armedInvalidParameterReturnsInvalidParametersAndDoesNotRun() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [checkoutSpec])
+        _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
+        // A branch beginning with '-' is rejected before anything is built (I1 / §4a).
+        #expect(guardState.authorize(fromId: allowed, text: "/checkout -x")
+                == .invalidParameters("invalid branch name"))
+    }
+
+    @Test func parameterizedCommandRequiresArmedSessionBeforeValidating() {
+        // I2: identity + arm gate come first — a disarmed operator is told to arm, not shown a
+        // validation result (which could leak whether the command/params were otherwise valid).
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [checkoutSpec])
+        #expect(guardState.authorize(fromId: allowed, text: "/checkout main") == .disarmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/checkout -x") == .disarmed)
+    }
 }

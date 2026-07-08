@@ -91,4 +91,35 @@ struct CommandRunnerTests {
         #expect(result.exitCode == 0)
         #expect(result.stdout == "PATH=\(ProcessCommandRunner.restrictedPath)\n")
     }
+
+    // MARK: - Working directory (S15 §4a) — set only from an allowlisted repo root, never chat
+
+    @Test func honorsWorkingDirectory() async throws {
+        // The runner sets `Process.currentDirectoryURL` from the Action's workingDirectory, so a
+        // process spawned there sees that directory as its cwd. `/bin/pwd` prints the physical cwd
+        // (no PWD env is inherited under the restricted environment), so compare canonical paths.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("relayback-wd-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let pwd = Action(command: "/t", description: "test", executable: "/bin/pwd",
+                         arguments: [], timeout: 10, workingDirectory: temp.path)
+
+        let result = await runner.run(pwd)
+        #expect(result.exitCode == 0)
+        let printed = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+            .resolvingSymlinksInPath().path
+        #expect(printed == temp.resolvingSymlinksInPath().path)
+    }
+
+    @Test func nilWorkingDirectoryInheritsLauncherCwd() async {
+        // The default (nil) preserves today's behavior — currentDirectoryURL is left untouched.
+        let result = await runner.run(action("/bin/pwd", []))
+        let printed = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+            .resolvingSymlinksInPath().path
+        #expect(result.exitCode == 0)
+        #expect(printed == URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .resolvingSymlinksInPath().path)
+    }
 }

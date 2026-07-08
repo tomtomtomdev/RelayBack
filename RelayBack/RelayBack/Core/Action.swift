@@ -19,7 +19,27 @@ struct Action: Equatable {
     /// Absolute path to the executable to spawn. Never derived from operator text.
     let executable: String
     /// Fixed argument array passed to the executable. Never derived from operator text.
+    /// For a parameterized action (§4a) any operator-supplied value has already been validated
+    /// and placed at a fixed index here; it never reaches the `executable` slot.
     let arguments: [String]
     /// Wall-clock limit; the runner terminates the process if it is exceeded.
     let timeout: TimeInterval
+    /// Absolute working directory for the spawned process, or nil to inherit the launcher's cwd
+    /// (the v1 default). Set only to a root drawn from the configured repo allowlist — never from
+    /// operator text (§4a). The runner passes it to `Process.currentDirectoryURL`.
+    let workingDirectory: String?
+
+    init(command: String,
+         description: String,
+         executable: String,
+         arguments: [String],
+         timeout: TimeInterval,
+         workingDirectory: String? = nil) {
+        self.command = command
+        self.description = description
+        self.executable = executable
+        self.arguments = arguments
+        self.timeout = timeout
+        self.workingDirectory = workingDirectory
+    }
 }

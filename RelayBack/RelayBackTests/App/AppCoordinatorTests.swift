@@ -247,4 +247,46 @@ struct AppCoordinatorTests {
         #expect(h.transport.sentDocuments.isEmpty)
         #expect(h.audit.entries.isEmpty)
     }
+
+    // MARK: - Parameterized actions (S15): invalid params warn + audit, no run; valid resolves & runs
+
+    // A representative spec wired into the guard for these tests only — S15 wires none in production.
+    private let checkoutSpec = ParameterizedCommand(
+        command: "/checkout", description: "Switch branch", executable: "/usr/bin/git",
+        fixedArgs: ["checkout", "--"], parameters: [.branch], timeout: 20)
+
+    private func makeParameterizedHarness() -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner()
+        let audit = InMemoryAuditSink()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                                  clock: clock, idleTimeout: idleTimeout,
+                                  parameterizedCommands: [checkoutSpec])
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         transport: transport, audit: audit, clock: clock)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner, audit: audit, clock: clock)
+    }
+
+    @Test func invalidParameterRepliesWarningAndAuditsWithoutRunning() async {
+        let h = makeParameterizedHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/checkout -x"))
+
+        #expect(h.runner.runCount == 0)                 // §4a: validation failure spawns nothing
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("invalid branch name") })
+        #expect(h.audit.entries.map(\.event).contains(.rejected(reason: "invalid branch name")))
+    }
+
+    @Test func validParameterizedCommandRunsTheResolvedAction() async {
+        let h = makeParameterizedHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/checkout main"))
+
+        // I1: the runner receives the resolver-built Action (fixed argv + validated branch), not text.
+        let expected = Action(command: "/checkout", description: "Switch branch",
+                              executable: "/usr/bin/git", arguments: ["checkout", "--", "main"],
+                              timeout: 20)
+        #expect(h.runner.runActions == [expected])
+    }
 }

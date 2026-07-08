@@ -24,6 +24,9 @@ enum Decision: Equatable {
     case disarmed
     /// Authorized sender, armed session, matched action — safe to run (invariant I2).
     case runAction(Action)
+    /// Authorized sender, armed session, matched a parameterized command, but a parameter failed
+    /// validation (§4a). Carries a short, secret-free reason; nothing is spawned.
+    case invalidParameters(String)
     /// Authorized sender, but the text matches no action and no control command.
     case unknownCommand
 }
@@ -43,6 +46,16 @@ struct AuthGuard {
     private let clock: Clock
     private let idleTimeout: TimeInterval
 
+    /// The parameterized dev-workflow commands this guard can route (§4a / S15). Empty in v1
+    /// production — the mechanism is present but no such command is matchable — until S16+ wire
+    /// the real git/build specs. When a token matches a spec, operator tokens are validated and
+    /// resolved to an `Action` by `ParameterizedActionResolver`.
+    private let parameterizedCommands: [ParameterizedCommand]
+
+    /// Maps a configured repo name to its absolute root, for a `.repoName` parameter. Empty until
+    /// S16 supplies the persisted repo allowlist. No path ever comes from chat (§4a).
+    private let repoTable: [String: String]
+
     /// End of the armed window; nil means never armed. Armed iff `clock.now < armedUntil`.
     /// Expiry is derived lazily from this instant — no background timer needed (pure type).
     private var armedUntil: Date?
@@ -51,12 +64,16 @@ struct AuthGuard {
          totpSecret: Data,
          registry: ActionRegistry,
          clock: Clock,
-         idleTimeout: TimeInterval) {
+         idleTimeout: TimeInterval,
+         parameterizedCommands: [ParameterizedCommand] = [],
+         repoTable: [String: String] = [:]) {
         self.allowlist = allowlist
         self.totpSecret = totpSecret
         self.registry = registry
         self.clock = clock
         self.idleTimeout = idleTimeout
+        self.parameterizedCommands = parameterizedCommands
+        self.repoTable = repoTable
     }
 
     /// Replaces the authorization allowlist at runtime (S12 — hot-reload from Settings). Arm state
@@ -103,14 +120,41 @@ struct AuthGuard {
         case "/status":
             return .control(.status(isArmed: isArmed))   // read-only: never touches arm state
         default:
-            guard let action = registry.match(text) else { return .unknownCommand }
-            guard isArmed else { return .disarmed }       // I2: actions run only while armed
-            extendArmedWindow()                            // authorized action resets idle timer
-            return .runAction(action)
+            if let action = registry.match(text) {
+                guard isArmed else { return .disarmed }    // I2: actions run only while armed
+                extendArmedWindow()                        // authorized action resets idle timer
+                return .runAction(action)
+            }
+            if let spec = parameterizedCommands.first(where: { $0.command.lowercased() == token }) {
+                // I2: gate on arm state BEFORE validating, so a disarmed operator is told to arm
+                // rather than shown a validation result.
+                guard isArmed else { return .disarmed }
+                let argTokens = operatorArguments(in: text)
+                switch ParameterizedActionResolver.resolve(spec, argTokens: argTokens, repoTable: repoTable) {
+                case let .ok(action):
+                    extendArmedWindow()
+                    return .runAction(action)
+                case let .invalid(reason):
+                    return .invalidParameters(reason)      // §4a: nothing spawns on bad input
+                }
+            }
+            return .unknownCommand
         }
     }
 
     // MARK: - Private
+
+    /// The operator-supplied argument for a parameterized command: everything after the command
+    /// token, as a single trimmed token (empty if none), preserving inner spacing so a multi-word
+    /// commit message survives intact. All §4a commands take at most one such value.
+    private func operatorArguments(in text: String) -> [String] {
+        var i = text.startIndex
+        while i < text.endIndex, text[i].isWhitespace { i = text.index(after: i) }   // leading ws
+        while i < text.endIndex, !text[i].isWhitespace { i = text.index(after: i) }  // command token
+        while i < text.endIndex, text[i].isWhitespace { i = text.index(after: i) }   // separating ws
+        let rest = String(text[i...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? [] : [rest]
+    }
 
     private mutating func handleArm(_ text: String) -> ControlResult {
         let parts = text.split(whereSeparator: \.isWhitespace)

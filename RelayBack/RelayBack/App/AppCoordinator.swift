@@ -91,6 +91,13 @@ final class AppCoordinator {
             await reply(chatId, "❓ Unknown command.")
             record(fromId: fromId, event: .rejected(reason: "unknown command"))
 
+        case let .invalidParameters(reason):
+            // §4a: a parameter failed validation — warn the operator and audit it; nothing spawns.
+            // The reason is short and secret-free (built by ParamValidator/the resolver, never from
+            // captured output or a secret), so it is safe in both the reply and the audit line (I3).
+            await reply(chatId, "⚠️ \(reason)")
+            record(fromId: fromId, event: .rejected(reason: reason))
+
         case let .control(result):
             await handleControl(result, fromId: fromId, chatId: chatId)
 

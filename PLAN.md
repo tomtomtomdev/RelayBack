@@ -331,6 +331,10 @@ repo) is rejected or rendered inert. Runs as normal user, restricted PATH (I4).
   `workingDirectory` (`/bin/pwd` in a temp dir smoke test); coordinator maps `.invalidParameters`
   to a reply + audit line, **no runner call**.
 - **Done when:** foundation tests green; no new command is matchable yet (proven by a test).
+- ✅ **Done** — 226 tests / 32 suites green. `Action.workingDirectory` + runner cwd, pure
+  `ParamValidator` + `ParameterizedActionResolver` (+ `ParameterizedCommand`/`ParamKind`),
+  `Decision.invalidParameters` wired through `AuthGuard` (empty spec set in production → nothing
+  matchable) and `AppCoordinator` (`⚠️` reply + audit, no runner call). See PROGRESS decisions.
 
 ### S16 — Repo config + active-repo selection
 - **Goal:** `RepoConfig { name, root, scheme?, destination?, simulatorDevice? }` persisted via

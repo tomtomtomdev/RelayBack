@@ -36,6 +36,9 @@ struct ProcessCommandRunner: CommandRunning {
         process.executableURL = URL(fileURLWithPath: action.executable)
         process.arguments = action.arguments            // I1: fixed array → execve, never a shell.
         process.environment = ["PATH": Self.restrictedPath]  // I4 / hygiene: no inherited env.
+        if let workingDirectory = action.workingDirectory {  // §4a: only an allowlisted repo root.
+            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory, isDirectory: true)
+        }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

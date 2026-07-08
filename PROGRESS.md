@@ -5,6 +5,38 @@
 
 ## Current state
 
+- **S15 done — parameterized-action foundation (dev-workflow epic begun).** The *mechanism* for
+  §4a validated-parameter actions is in place and fully test-exercised, but **inert in production**:
+  no new bot command is matchable (proven). New pieces:
+  - **`Action.workingDirectory: String?`** (default nil = inherit, today's behavior) via an explicit
+    memberwise init so all existing call sites compile unchanged; `ProcessCommandRunner` sets
+    `Process.currentDirectoryURL` from it only when non-nil (smoke-tested with `/bin/pwd` in a temp
+    dir; nil-case asserted to inherit the launcher cwd).
+  - **Pure `Core/ParamValidator`** (TDD'd tables): `repoName(_:in:)` = exact allowlist lookup →
+    absolute root (traversal-proof — no path from chat), `branch` = `^[A-Za-z0-9._/-]+$` + no
+    leading `-`, `commitMessage` = non-empty, single-line, length-capped (200), no leading `-`.
+    Metachars are permitted where harmless (no shell — I1 unchanged); the real guard is the
+    leading-`-` rejection so a value can never be read as a flag.
+  - **Pure `Core/ParameterizedActionResolver`** + `ParameterizedCommand` spec (`command`,
+    `executable`, fixed `fixedArgs`, ordered `[ParamKind]`, `timeout`) + `ParamKind`
+    (`.repoName|.branch|.commitMessage`) + `ParameterResolution` (`.ok(Action)|.invalid(reason)`).
+    `resolve(spec, argTokens, repoTable)` validates each token and builds `executable + fixedArgs +
+    validatedValues` — a value-bearing arg sits behind a `--` guard carried in `fixedArgs`; a
+    `.repoName` param resolves to a root and becomes `workingDirectory` (not argv). Bad input →
+    `.invalid(reason)`, nothing built.
+  - **`Decision.invalidParameters(String)`** + `AuthGuard` routing: after the registry-match path,
+    a token matching a configured `ParameterizedCommand` is gated on arm state **before** validation
+    (disarmed → `.disarmed`, not a validation leak), then resolved. `AuthGuard` gained injected
+    `parameterizedCommands: [ParameterizedCommand] = []` + `repoTable: [String:String] = [:]` (both
+    **empty in production** — `AppRuntime` passes neither). `AppCoordinator` maps `.invalidParameters`
+    to a `⚠️ <reason>` reply + a `.rejected(reason:)` audit line (reusing the S9 taxonomy — reason is
+    short and secret-free, I3), and **never calls the runner** (I2 preserved).
+  - **I1 by construction:** the executable + leading argv come only from the in-code spec; operator
+    text only ever fills a validated, fixed argv index. No new SPEC deviation (§4a already scoped this).
+- ✅ **S15 verified green on macOS** (this session): full `RelayBackTests` suite = **226 tests /
+  32 suites** passing (added `ParamValidatorTests` (10) + `ParameterizedActionResolverTests` (9) +
+  `AuthGuardTests` parameterized-routing (4) + `AppCoordinatorTests` invalid/valid param (2) +
+  `CommandRunnerTests` workingDirectory (2)). App builds clean.
 - **S13f done — Audit pane + Connection pane. S13 design-conformance epic COMPLETE.** The **Audit**
   pane is now the handoff's append-only table: a column header (Time · from.id · Action / decision ·
   Exit), zebra-striped mono rows tinted by decision, and the "Append-only · no secrets, no full
@@ -203,12 +235,15 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S15** — Parameterized-action foundation (start of the S15–S19 dev-workflow epic).
-  With **S13 complete**, all six handoff surfaces are native and v1 is both logic- and design-DoD
-  met. S15 introduces validated-argv parameterized actions (never shell — I1 unchanged) behind
-  protocols with fakes, TDD-first; see PLAN S15 for the seam list. Other optional follow-ups (not
-  blocking any epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke;
-  a live per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
+- **Next slice:** **S16** — Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`). S15 landed
+  the validated-argv foundation (resolver + validators + `Action.workingDirectory` + the
+  `.invalidParameters` decision), but production wires **no** `ParameterizedCommand` specs and an
+  **empty** `repoTable`, so nothing new is matchable yet. S16 adds a persisted `RepoConfig` (via
+  `ConfigStore`), a Settings repo editor, session **active-repo** state, and the first user-facing
+  parameterized commands (`/cd <repo>`, `/pwd`, `/repos`) — feeding the real repo table into the
+  guard and clearing active-repo on disarm. See PLAN S16. Other optional follow-ups (not blocking
+  the epic): per-second live menu-bar countdown; a real-Keychain/UserDefaults launch smoke; a live
+  per-poll connection indicator reading the S14 `connection.log`; SPEC §10 future-phase items.
 - **Blockers / open questions:** none. The S12 design question is resolved (hot-reload, arm state
   preserved — see decisions).
 - ✅ **S1–S10 verified green on macOS** (Xcode 26.5, this session): full `RelayBackTests` suite =
@@ -242,7 +277,7 @@
 | S13f | · Audit pane + Connection pane                   | ✅ done |
 | S14  | Connection-lifecycle logging (persistent) *(new)* | ✅ done |
 | —    | Seed allowlist expanded to 10 read-only diagnostics *(amends S2)* | ✅ done |
-| S15  | Parameterized-action foundation *(dev-workflow epic)* | ☐ not started |
+| S15  | Parameterized-action foundation *(dev-workflow epic)* | ✅ done |
 | S16  | Repo config + active-repo selection (`/cd`/`/pwd`/`/repos`) | ☐ not started |
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ☐ not started |
 | S18  | xcodebuild (`/build`) | ☐ not started |
@@ -258,6 +293,38 @@ slice per session._
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-08 — S15: **The resolver is data-driven over a `[ParameterizedCommand]` spec set, and
+  AuthGuard routes to it — production wires an empty set.** PLAN sketched the resolver as
+  `(command, argTokens, repoTable) -> …` (implying it knows commands internally). Instead a
+  `ParameterizedCommand` describes each command's fixed executable/argv + ordered param slots, and
+  `AuthGuard` holds an injected `[ParameterizedCommand]` (default `[]`) + `repoTable` (default `[:]`).
+  Why: (1) it proves "no command matchable" cleanly — production passes no specs, so a
+  parameterized-looking command falls through to `.unknownCommand` (asserted); (2) it exercises the
+  **whole** authorize→coordinator path in tests (specs injected) rather than leaving a dormant
+  coordinator branch; (3) S16/S17 just append specs + a real repo table, no resolver rewrite. This
+  sharpens PLAN's standalone-resolver sketch; behavior matches §4a exactly.
+- 2026-07-08 — S15: **Arm gate precedes parameter validation.** A matched parameterized command from
+  a disarmed operator returns `.disarmed` (send `/arm` first), not a validation result — so validity
+  of the command/params is never leaked to a disarmed session (I2 first, §4a second).
+- 2026-07-08 — S15: **A `.repoName` param sets `workingDirectory`, not an argv token; the `--` guard
+  lives in the spec's `fixedArgs`.** Per §4a the repo context is a working directory drawn from the
+  allowlist (traversal-proof: `ParamValidator.repoName` is an exact dict lookup, so `../x` is just
+  not a key). Value-bearing args are guarded by placing `--` in `fixedArgs` (e.g. `["checkout","--"]`)
+  — belt-and-suspenders atop the leading-`-` rejection in the validators, rather than the resolver
+  auto-inserting `--` (which would break `commit -a -m <msg>`, where the value follows `-m`).
+- 2026-07-08 — S15: **At most one operator argument, captured as the whole trimmed remainder.** All
+  §4a commands take 0 or 1 operator value, so `AuthGuard.operatorArguments(in:)` returns the text
+  after the command token as a single token (preserving inner spaces so a multi-word commit message
+  stays one argv token). A 0-param command with trailing text → `.invalid("unexpected extra input")`
+  (this is what will reject operator args on `/push`/`/pull` in S17).
+- 2026-07-08 — S15: **`.invalidParameters` reuses the S9 `.rejected(reason:)` audit case — no new
+  `AuditEvent`.** The reason is built only by `ParamValidator`/the resolver (short, secret-free —
+  never captured output or a secret), so it is safe in both the `⚠️` reply and the audit line (I3),
+  and the narrow audit taxonomy that structurally enforces I3 is left unchanged.
+- 2026-07-08 — S15: **`Action` gained an explicit memberwise init with `workingDirectory: String? =
+  nil`.** The synthesized memberwise init wouldn't give the new field a default, which would break
+  every existing `Action(...)` call site; an explicit init with the default keeps them all compiling
+  and preserves today's cwd-inherit behavior for the 10 seed diagnostics.
 - 2026-07-08 — S13f: **Chose to add `TelegramTransport.getMe` (the PLAN decision), not a generic
   connected state.** The handoff shows `@relayback_bot`; showing it needs the bot's username. Added
   `getMe() -> TelegramBotInfo` (username only — a separate type from `TelegramUser` so the `from.id`
