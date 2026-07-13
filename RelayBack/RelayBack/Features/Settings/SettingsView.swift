@@ -360,12 +360,9 @@ struct SettingsView: View {
     }
 
     // MARK: - Repos pane (S16 — the §4a working-directory allowlist)
-
-    @State private var newRepoName = ""
-    @State private var newRepoRoot = ""
-    @State private var newRepoScheme = ""
-    @State private var newRepoDestination = ""
-    @State private var newRepoSimulator = ""
+    //
+    // The add-repo draft lives on `SettingsModel` (S20) so the folder chooser + name suggestion are
+    // unit-tested; the working directory is picked from a native browser, never typed.
 
     private var reposPane: some View {
         ScrollView {
@@ -429,19 +426,42 @@ struct SettingsView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color(hex: 0x6B7280))
                 .kerning(0.5)
-            repoField("Name (e.g. relayback)", text: $newRepoName)
-                .onSubmit { addRepoFromForm() }
-            repoField("Absolute path (e.g. /Users/you/dev/RelayBack)", text: $newRepoRoot)
-                .onSubmit { addRepoFromForm() }
-            repoField("Scheme — optional (for /build)", text: $newRepoScheme)
-            repoField("Destination — optional (for /build)", text: $newRepoDestination)
-            repoField("Simulator device — optional (for /sim)", text: $newRepoSimulator)
-            Button("Add repo") { addRepoFromForm() }
+            repoField("Name (e.g. relayback)", text: $model.newRepoName)
+                .onSubmit { model.submitNewRepo() }
+            folderChooserRow
+            repoField("Scheme — optional (for /build)", text: $model.newRepoScheme)
+            repoField("Destination — optional (for /build)", text: $model.newRepoDestination)
+            repoField("Simulator device — optional (for /sim)", text: $model.newRepoSimulator)
+            Button("Add repo") { model.submitNewRepo() }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(newRepoName.trimmingCharacters(in: .whitespaces).isEmpty
-                          || newRepoRoot.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(model.newRepoName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || model.newRepoRoot.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.top, 4)
+    }
+
+    /// The working directory is chosen from a native folder browser (S20), never typed. Shows the
+    /// selected path (or a placeholder) next to a "Choose Folder…" button.
+    private var folderChooserRow: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .foregroundStyle(model.newRepoRoot.isEmpty ? Theme.textTertiary : Theme.accent)
+                Text(model.newRepoRoot.isEmpty ? "No folder chosen" : model.newRepoRoot)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(model.newRepoRoot.isEmpty ? Theme.textTertiary : Theme.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+
+            Button("Choose Folder…") { model.chooseRepoRoot() }
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.accent)
+        }
     }
 
     private func repoField(_ placeholder: String, text: Binding<String>) -> some View {
@@ -451,14 +471,6 @@ struct SettingsView: View {
             .padding(.horizontal, 11).padding(.vertical, 9)
             .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
-    }
-
-    private func addRepoFromForm() {
-        guard model.addRepo(name: newRepoName, root: newRepoRoot,
-                            scheme: newRepoScheme, destination: newRepoDestination,
-                            simulatorDevice: newRepoSimulator) else { return }
-        newRepoName = ""; newRepoRoot = ""; newRepoScheme = ""
-        newRepoDestination = ""; newRepoSimulator = ""
     }
 
     // MARK: - General pane (S13e)

@@ -197,6 +197,64 @@ struct SettingsModelTests {
         #expect(model.repoError != nil)
     }
 
+    // MARK: - Add-repo form: folder chooser + draft (S20)
+
+    @Test func chooseRepoRootFillsRootAndSuggestsNameFromFolder() {
+        let picker = FakeFolderPicker(pathToReturn: "/Users/op/dev/RelayBack")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.chooseRepoRoot()
+        #expect(model.newRepoRoot == "/Users/op/dev/RelayBack")
+        #expect(model.newRepoName == "RelayBack")   // suggested from the chosen folder's name
+    }
+
+    @Test func chooseRepoRootDoesNotOverwriteATypedName() {
+        let picker = FakeFolderPicker(pathToReturn: "/Users/op/dev/RelayBack")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.newRepoName = "myproj"
+        model.chooseRepoRoot()
+        #expect(model.newRepoRoot == "/Users/op/dev/RelayBack")
+        #expect(model.newRepoName == "myproj")      // operator's name is kept
+    }
+
+    @Test func chooseRepoRootSuggestedNameIgnoresTrailingSlash() {
+        let picker = FakeFolderPicker(pathToReturn: "/Users/op/dev/Notes/")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.chooseRepoRoot()
+        #expect(model.newRepoName == "Notes")
+    }
+
+    @Test func cancellingTheFolderChooserLeavesTheDraftUnchanged() {
+        let picker = FakeFolderPicker(pathToReturn: nil)   // operator cancelled
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.newRepoName = "keep"
+        model.chooseRepoRoot()
+        #expect(picker.chooseCount == 1)
+        #expect(model.newRepoRoot == "")
+        #expect(model.newRepoName == "keep")
+    }
+
+    @Test func submitNewRepoAddsFromDraftAndClearsItOnSuccess() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        model.newRepoName = "relayback"
+        model.newRepoRoot = "/Users/op/dev/RelayBack"
+        model.newRepoScheme = "RelayBack"
+        #expect(model.submitNewRepo())
+        #expect(config.repos() == [RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack", scheme: "RelayBack")])
+        #expect(model.newRepoName == "")            // draft cleared on success
+        #expect(model.newRepoRoot == "")
+        #expect(model.newRepoScheme == "")
+    }
+
+    @Test func submitNewRepoKeepsDraftAndSurfacesErrorOnFailure() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        model.newRepoName = "x"      // no root chosen → rejected
+        #expect(model.submitNewRepo() == false)
+        #expect(model.newRepoName == "x")           // kept so the operator can fix it
+        #expect(model.repoError != nil)
+        #expect(model.repos.isEmpty)
+    }
+
     @Test func noSecretMeansNoQR() {
         let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
         #expect(model.hasSecret == false)

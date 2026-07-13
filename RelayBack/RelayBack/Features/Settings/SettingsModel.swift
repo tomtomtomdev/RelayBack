@@ -52,6 +52,20 @@ final class SettingsModel {
     /// running `AuthGuard` (S16), mirroring `onAllowlistChanged`.
     var onReposChanged: (([RepoConfig]) -> Void)?
 
+    // Draft fields for the "Add repo" form (S20 — moved here from the view so the folder-chooser
+    // and name-suggestion glue is unit-testable). `newRepoRoot` is filled by `chooseRepoRoot()`
+    // from a native folder browser rather than typed; `submitNewRepo()` commits and clears them.
+    /// Draft repo name (`/cd <name>` target); suggested from the chosen folder unless already set.
+    var newRepoName = ""
+    /// Draft working directory; set by `chooseRepoRoot()` from the folder browser, never typed.
+    var newRepoRoot = ""
+    /// Draft `xcodebuild -scheme` (optional, for `/build`).
+    var newRepoScheme = ""
+    /// Draft `xcodebuild -destination` (optional, for `/build`).
+    var newRepoDestination = ""
+    /// Draft simulator device (optional, for `/sim`).
+    var newRepoSimulator = ""
+
     /// Live transport reachability shown in the Connection pane (S13f). The composition root
     /// (`AppRuntime`) probes the bot at startup and pushes the result here; the pane renders it via
     /// `ConnectionStatePresentation`. Starts `.connecting` until the first probe resolves.
@@ -72,11 +86,13 @@ final class SettingsModel {
     private let configStore: ConfigStore
     private let loginItem: LoginItemControlling
     private let auditReader: AuditReading?
+    private let folderPicker: FolderPicking
 
     init(store: SecretStore,
          configStore: ConfigStore = UserDefaultsConfigStore(),
          loginItem: LoginItemControlling = SMAppServiceLoginItem(),
          auditReader: AuditReading? = nil,
+         folderPicker: FolderPicking = NSOpenPanelFolderPicker(),
          issuer: String = "RelayBack",
          account: String = "mac",
          idleTimeout: TimeInterval = 300,
@@ -85,6 +101,7 @@ final class SettingsModel {
         self.configStore = configStore
         self.loginItem = loginItem
         self.auditReader = auditReader
+        self.folderPicker = folderPicker
         self.issuer = issuer
         self.account = account
         self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
@@ -195,6 +212,38 @@ final class SettingsModel {
         let before = repos
         repos.removeAll { $0.name == name }
         if repos != before { persistRepos() }
+    }
+
+    /// Opens the native folder browser and, on a selection, fills `newRepoRoot` with the chosen
+    /// directory — and, when the operator hasn't already named the repo, suggests the folder's own
+    /// name. A cancelled chooser leaves the draft untouched. (S20 — the working directory is picked,
+    /// never typed, so it always resolves to a real directory.)
+    func chooseRepoRoot() {
+        guard let path = folderPicker.chooseFolder() else { return }
+        newRepoRoot = path
+        if newRepoName.trimmingCharacters(in: .whitespaces).isEmpty {
+            newRepoName = Self.suggestedName(forRoot: path)
+        }
+    }
+
+    /// Commits the drafted repo via `addRepo`; on success clears the draft fields, on failure keeps
+    /// them (with `repoError` set) so the operator can fix the input. Returns whether it was added.
+    @discardableResult
+    func submitNewRepo() -> Bool {
+        guard addRepo(name: newRepoName, root: newRepoRoot,
+                      scheme: newRepoScheme, destination: newRepoDestination,
+                      simulatorDevice: newRepoSimulator) else { return false }
+        newRepoName = ""; newRepoRoot = ""; newRepoScheme = ""
+        newRepoDestination = ""; newRepoSimulator = ""
+        return true
+    }
+
+    /// The suggested repo name for a chosen directory: its last path component (trailing slashes
+    /// ignored), empty for the filesystem root. Purely derived so the folder-chooser suggestion is
+    /// tested without a real panel; the operator can override it before adding.
+    static func suggestedName(forRoot root: String) -> String {
+        let last = (root.trimmingCharacters(in: .whitespaces) as NSString).lastPathComponent
+        return last == "/" ? "" : last
     }
 
     /// Writes the current repos to the config store and notifies the running guard (S16).

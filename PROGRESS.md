@@ -5,6 +5,32 @@
 
 ## Current state
 
+- **Enhancement (post-S19) — Settings → Repos "Add repo" uses a native folder browser.** The repo
+  working directory is now **picked from an `NSOpenPanel`**, not hand-typed, so it always resolves to
+  a directory that actually exists (a typo can't create a bogus repo root the dev commands would run
+  in). New pieces:
+  - **`Features/Settings/FolderPicking` seam** — `protocol FolderPicking { func chooseFolder() -> String? }`
+    + thin real `NSOpenPanelFolderPicker` (directories only, single selection, returns the absolute
+      path or nil on cancel). Fake `RelayBackTests/Support/FakeFolderPicker` (scripted path + call
+      count) drives the model in tests — no test presents a real panel (mirrors the `LoginItem` seam).
+  - **Add-repo draft moved into `SettingsModel`** (was `@State` in the view) so the chooser + name
+    suggestion are unit-testable: `newRepoName/Root/Scheme/Destination/Simulator`, injected
+    `folderPicker: FolderPicking = NSOpenPanelFolderPicker()` (default keeps every existing init/test
+    call site unchanged), `chooseRepoRoot()` (fills `newRepoRoot`; suggests the folder's name only
+    when the operator hasn't typed one; a cancel leaves the draft untouched), `submitNewRepo()`
+    (commits via the existing `addRepo`, clears the draft on success / keeps it + `repoError` on
+    failure), and pure `static suggestedName(forRoot:)` (basename, trailing-slash-tolerant).
+  - **View**: `reposPane`'s free-text "Absolute path" field replaced by a `folderChooserRow`
+    (path display + **Choose Folder…** button → `model.chooseRepoRoot()`); fields bind to
+    `$model.newRepo*`; **Add repo** → `model.submitNewRepo()`.
+  - **No security-surface change.** The chosen path is still stored as `RepoConfig.root` and used only
+    as the resolved action's `workingDirectory` (§4a) — I1/I2/I3/I4 unchanged; if anything the root is
+    now guaranteed to be a real, operator-selected directory. Thin `NSOpenPanel`/view glue is
+    Preview/on-device verified; the `chooseRepoRoot`/`submitNewRepo`/`suggestedName` logic is unit-tested.
+  - ✅ **Verified green on macOS** (this session): full `RelayBackTests` suite = **292 tests / 36
+    suites** passing (added `SettingsModelTests` (6) — folder-pick fills root + suggests name, doesn't
+    clobber a typed name, trailing-slash suggestion, cancel is a no-op, submit clears-on-success /
+    keeps-on-failure). App builds clean.
 - **Bugfix (post-S19) — menu-bar popover corner/shadow artifact.** The disarmed/armed popover showed a
   mismatched double-corner "shelf" (most visible at the bottom-left): `MenuBarRootView` painted an
   opaque, square-cornered `.background(Theme.popoverSurface)` edge-to-edge as the root of a
