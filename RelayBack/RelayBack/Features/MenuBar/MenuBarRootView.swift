@@ -28,6 +28,11 @@ struct MenuBarRootView: View {
         }
         .frame(width: Theme.popoverWidth, alignment: .leading)
         .background(Theme.popoverSurface)
+        // The `.window` menu-bar extra hosts this content in a rounded, shadowed system window.
+        // Without clipping, the opaque surface paints square corners into that rounded region,
+        // leaving a mismatched corner/shadow "shelf" (esp. bottom-left). Clip to the popover
+        // radius so the corners stay transparent and the window's rounded shadow reads cleanly.
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.popover, style: .continuous))
     }
 
     // MARK: - Bodies

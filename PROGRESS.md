@@ -5,6 +5,16 @@
 
 ## Current state
 
+- **Bugfix (post-S19) — menu-bar popover corner/shadow artifact.** The disarmed/armed popover showed a
+  mismatched double-corner "shelf" (most visible at the bottom-left): `MenuBarRootView` painted an
+  opaque, square-cornered `.background(Theme.popoverSurface)` edge-to-edge as the root of a
+  `.menuBarExtraStyle(.window)` popover, and the square fill overpainted into the rounded, shadowed
+  system window's corner regions. Fix: `.clipShape(RoundedRectangle(cornerRadius: Theme.Radius.popover,
+  style: .continuous))` after the background so the corners stay transparent and the window's rounded
+  shadow reads as one clean shape. View-only change (thin SwiftUI, no `Core`/security surface — not
+  unit-testable; Preview/on-device visual verification). App builds clean. Clipping to the popover
+  radius (≥ the system window radius) is the safe direction — content rounds at least as much as the
+  window, so no desktop shows through the corners.
 - **S19 done — Simulator run (`/sim`) wired. The S15–S19 dev-workflow epic is COMPLETE.** `/sim` is the
   first **multi-step** command: it resolves to an ordered *sequence* of processes built entirely from
   the active repo's `RepoConfig`, and the coordinator runs them in order, stopping on the first
