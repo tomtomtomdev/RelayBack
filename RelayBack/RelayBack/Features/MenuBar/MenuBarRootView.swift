@@ -351,25 +351,18 @@ struct MenuBarRootView: View {
     }
 }
 
-/// A small dot that gently pulses (opacity + scale) to signal "live", per the handoff's
-/// listening/armed indicators. Static when `animates` is false.
+/// A small status dot (green = listening/armed, grey = disarmed). It used to pulse via a
+/// `repeatForever` animation, but that looping transaction never settled after the
+/// `MenuBarExtra` window's open transition, so the popover appeared to keep animating on open.
+/// It's now static; `animates` is retained for call-site compatibility and intentionally unused.
 private struct PulsingDot: View {
     let color: Color
     var animates: Bool = true
-    @State private var on = false
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 8, height: 8)
-            .opacity(animates ? (on ? 0.35 : 1) : 1)
-            .scaleEffect(animates ? (on ? 0.82 : 1) : 1)
-            .onAppear {
-                guard animates else { return }
-                withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
-                    on = true
-                }
-            }
     }
 }
 
