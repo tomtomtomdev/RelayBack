@@ -144,6 +144,13 @@ struct SettingsView: View {
     }
 
     @State private var showsOtpauth = false
+    @State private var tokenSaved = false
+
+    /// Persists the bot token and shows a confirmation on success (cleared when the field is edited).
+    private func commitToken() {
+        model.saveToken()
+        tokenSaved = (model.lastError == nil)
+    }
 
     private func qrCard(for uri: String) -> some View {
         qrImage(for: uri)
@@ -235,8 +242,17 @@ struct SettingsView: View {
                 SecureField("123456:ABC-DEF…", text: $model.botToken)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 360)
-                Button("Save token") { model.saveToken() }
-                    .buttonStyle(PrimaryButtonStyle())
+                    .onSubmit { commitToken() }
+                    .onChange(of: model.botToken) { tokenSaved = false }
+                HStack(spacing: 10) {
+                    Button("Save token") { commitToken() }
+                        .buttonStyle(PrimaryButtonStyle())
+                    if tokenSaved {
+                        Label("Saved to Keychain", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(Theme.armedGreenText)
+                    }
+                }
             }
             if let error = model.lastError {
                 Text(error).font(.caption).foregroundStyle(Theme.danger)
@@ -414,7 +430,9 @@ struct SettingsView: View {
                 .foregroundStyle(Color(hex: 0x6B7280))
                 .kerning(0.5)
             repoField("Name (e.g. relayback)", text: $newRepoName)
+                .onSubmit { addRepoFromForm() }
             repoField("Absolute path (e.g. /Users/you/dev/RelayBack)", text: $newRepoRoot)
+                .onSubmit { addRepoFromForm() }
             repoField("Scheme — optional (for /build)", text: $newRepoScheme)
             repoField("Destination — optional (for /build)", text: $newRepoDestination)
             repoField("Simulator device — optional (for /sim)", text: $newRepoSimulator)
@@ -600,25 +618,40 @@ struct SettingsView: View {
 // MARK: - Button styles (handoff primary/secondary)
 
 private struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14).padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accent))
-            .opacity(configuration.isPressed ? 0.8 : 1)
+    func makeBody(configuration: Configuration) -> some View { StyledLabel(configuration: configuration) }
+
+    // A nested view so the style can read `\.isEnabled` (ButtonStyle.makeBody can't). Without it a
+    // `.disabled(...)` button (e.g. Add repo with an empty field) still painted solid blue and looked
+    // clickable while silently doing nothing — which reads as "the button doesn't respond".
+    private struct StyledLabel: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accent))
+                .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+        }
     }
 }
 
 private struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(Theme.textPrimary)
-            .padding(.horizontal, 14).padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
-            .opacity(configuration.isPressed ? 0.8 : 1)
+    func makeBody(configuration: Configuration) -> some View { StyledLabel(configuration: configuration) }
+
+    private struct StyledLabel: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+                .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+        }
     }
 }
 

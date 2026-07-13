@@ -225,6 +225,10 @@ struct MenuBarRootView: View {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
                     .font(.system(size: 12, weight: .medium))
+                    // Explicit color: the popover surface is always light, but the MenuBarExtra
+                    // window's vibrant context defaults the label to white (invisible in light
+                    // mode). Pin it to a readable grey like the Quit control.
+                    .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.borderless)
             Spacer()
@@ -331,6 +335,10 @@ struct MenuBarRootView: View {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
                     .font(.system(size: 12, weight: .medium))
+                    // Explicit color: the popover surface is always light, but the MenuBarExtra
+                    // window's vibrant context defaults the label to white (invisible in light
+                    // mode). Pin it to a readable grey like the Quit control.
+                    .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.borderless)
             Button("Quit") { NSApplication.shared.terminate(nil) }
