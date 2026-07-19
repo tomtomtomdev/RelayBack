@@ -728,6 +728,10 @@ private final class PreviewConfigStore: ConfigStore {
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
     func repos() -> [RepoConfig] { repoConfigs }
     func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
+    func claudeEnabled() -> Bool { false }
+    func setClaudeEnabled(_ enabled: Bool) {}
+    func claudeProfile() -> ClaudeProfile { .default }
+    func setClaudeProfile(_ profile: ClaudeProfile) {}
 }
 
 /// A throwaway `AuditReading` so the Audit-pane preview renders a representative, color-coded table.

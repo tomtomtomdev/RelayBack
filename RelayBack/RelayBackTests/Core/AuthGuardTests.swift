@@ -55,6 +55,19 @@ struct AuthGuardTests {
         #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
     }
 
+    // MARK: - Agent action not wired yet (S20 — proven inert until S21)
+
+    @Test func claudeCommandIsNotMatchableUntilWired() {
+        // S20 lands the mechanism (ClaudeInvocation / ClaudeRunning / config) but wires no command.
+        // Even armed + authorized, `/claude …` routes nowhere — no spec, no runner in the guard yet.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        #expect(guardState.authorize(fromId: allowed,
+                                     text: "/arm \(goodCode(at: clock.now))") == .control(.armAccepted))
+        #expect(guardState.authorize(fromId: allowed,
+                                     text: "/claude summarize the diff") == .unknownCommand)
+    }
+
     // MARK: - Arming
 
     @Test func armWithBadCodeStaysDisarmed() {

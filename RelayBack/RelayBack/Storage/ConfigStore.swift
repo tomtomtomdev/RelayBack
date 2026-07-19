@@ -27,4 +27,18 @@ protocol ConfigStore {
     func repos() -> [RepoConfig]
     /// Persist the repo allowlist, replacing any previous value.
     func setRepos(_ repos: [RepoConfig])
+
+    // MARK: - Claude agent action (§4b / S20)
+
+    /// Whether the `/claude` agent action is enabled. **Fails closed to `false`**: like the
+    /// allowlist, an absent config can only ever narrow capability, never widen it (I5). Off by
+    /// default — nothing spawns until the operator opts in (S22).
+    func claudeEnabled() -> Bool
+    /// Persist the `/claude` capability toggle.
+    func setClaudeEnabled(_ enabled: Bool)
+    /// The persisted Claude Code profile (executable path, permission posture, timeout, model), or
+    /// the fail-closed `ClaudeProfile.default` (no executable, `restricted`) if none is stored.
+    func claudeProfile() -> ClaudeProfile
+    /// Persist the Claude Code profile, replacing any previous value.
+    func setClaudeProfile(_ profile: ClaudeProfile)
 }

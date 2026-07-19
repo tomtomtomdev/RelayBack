@@ -90,4 +90,47 @@ struct ConfigStoreTests {
         store.setRepos(repos)
         #expect(store.repos() == repos)
     }
+
+    // MARK: - Claude agent config (§4b / S20)
+
+    @Test func missingClaudeEnabledIsFalse() {
+        // Fails closed like the allowlist — an absent config can only narrow capability (I5).
+        #expect(InMemoryConfigStore().claudeEnabled() == false)
+    }
+
+    @Test func missingClaudeProfileIsTheFailClosedDefault() {
+        let store = InMemoryConfigStore()
+        #expect(store.claudeProfile() == ClaudeProfile.default)
+        #expect(store.claudeProfile().permission == .restricted)
+        #expect(store.claudeProfile().executablePath.isEmpty)
+    }
+
+    @Test func claudeEnabledAndProfileRoundTrip() {
+        let store = InMemoryConfigStore()
+        store.setClaudeEnabled(true)
+        let profile = ClaudeProfile(executablePath: "/usr/local/bin/claude",
+                                    permission: .editsInRepo, timeout: 900, model: "opus")
+        store.setClaudeProfile(profile)
+        #expect(store.claudeEnabled() == true)
+        #expect(store.claudeProfile() == profile)
+    }
+
+    // Real impl, isolated suite — the toggle and the (JSON-encoded) profile round-trip.
+    @Test func userDefaultsStoreRoundTripsClaudeConfigInIsolatedSuite() throws {
+        let suite = "com.RelayBack.tests.config.claude"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = UserDefaultsConfigStore(defaults: defaults)
+        #expect(store.claudeEnabled() == false)
+        #expect(store.claudeProfile() == .default)
+
+        store.setClaudeEnabled(true)
+        let profile = ClaudeProfile(executablePath: "/opt/claude", permission: .fullBypass,
+                                    timeout: 1200, model: nil)
+        store.setClaudeProfile(profile)
+        #expect(store.claudeEnabled() == true)
+        #expect(store.claudeProfile() == profile)
+    }
 }

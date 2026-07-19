@@ -5,8 +5,42 @@
 
 ## Current state
 
-- **S20–S22 planned (docs only, NOT implemented) — agent action `/claude` (headless Claude Code).**
-  A deliberate **threat-model change** was scoped into the docs from
+- **S20 done — Claude agent foundation (mechanism only; `/claude` not yet routable).** The first slice
+  of the agent-action epic (SPEC §4b) landed test-first. New pieces:
+  - **Pure `Core/ClaudeInvocation`** — `build(prompt:repoRoot:profile:) -> ClaudeInvocation?` turns a
+    `/claude` prompt into a headless Claude Code argv. **I5/I1 by construction:** the prompt is bound to
+    `-p` and placed **last**, so it is always `arguments.last` and can never become a flag or the
+    executable (no shell — metachars are literal); every other argv word comes only from the profile.
+    Empty/whitespace prompt → nil. Profile→flags is an **allow-list** (a profile can only narrow):
+    `restricted` = `--allowedTools "Read Grep Glob"`; `editsInRepo` = `--allowedTools "Read Grep Glob
+    Edit Write" --disallowedTools "Bash"`; `fullBypass` = `--dangerously-skip-permissions`; optional
+    `--model` inserted before `-p`.
+  - **`Core/ClaudeProfile`** (`executablePath`, `permission: ClaudePermissionProfile`, `timeout`,
+    `model?`; `Codable`) + `ClaudePermissionProfile` enum. Fail-closed `.default` (no executable,
+    `restricted`).
+  - **`ConfigStore` gained `claudeEnabled()`/`setClaudeEnabled` + `claudeProfile()`/`setClaudeProfile`**,
+    implemented in `UserDefaultsConfigStore` (Bool + JSON, **fails closed** to false/`.default`, I5),
+    `InMemoryConfigStore`, and the Settings `PreviewConfigStore`.
+  - **`Execution/ClaudeRunning` protocol** + `FakeClaudeRunner` (for S21) + real **`ProcessClaudeRunner`**.
+    The S7 spawn/timeout/hygiene core was **extracted to `Execution/ProcessSpawner`** (behavior-preserving
+    refactor — `ProcessCommandRunner` now delegates; `CommandRunnerTests` stay green) so the agent runner
+    reuses the **same** audited execve path (I1/I4) without duplicating it — and without the free-text
+    prompt ever entering an `Action` (the allowlist path stays "fixed/validated only").
+  - **Not wired:** no `/claude` command is matchable (guard test proves an armed `/claude …` →
+    `.unknownCommand`). Routing + gating (armed AND `claudeEnabled` AND active repo) is **S21**; the
+    Settings capability pane is **S22**.
+  - **⚠️ Before enabling in production (S22):** the profiles assume headless `-p` **auto-denies**
+    non-allowlisted tools (never hangs). S20's tests pin the chosen flag *mapping* (pure builder), not
+    the CLI's live behavior — smoke `/claude` against the installed Claude Code and confirm no hang and
+    the exact flag spellings first.
+- ✅ **S20 verified green on macOS** (this session): full `RelayBackTests` = **309 tests / 38 suites**
+  passing (added `ClaudeInvocationTests` (9) — I5 token/flag-injection, per-profile flag sets, model,
+  empty-prompt; `ClaudeRunnerTests` (3) — real `/bin/echo` stand-in smoke incl. a hostile prompt passed
+  as one inert arg, empty-prompt-no-spawn; `ConfigStoreTests` (+4) — claude toggle/profile round-trip +
+  fail-closed + isolated-suite UserDefaults smoke; `AuthGuardTests` (+1) — `/claude` not matchable). App
+  builds clean.
+- **S20–S22 scoped into the docs (planning step, commit `59b2021`) — agent action `/claude` (headless
+  Claude Code).** A deliberate **threat-model change** was scoped into the docs from
   `relayback-claude-agent-amendment.md`: `/claude <prompt>` runs the Claude Code CLI headless in the
   **active repo**, gated by its own capability toggle. It does **not** add a shell (I1's letter holds
   — the prompt is a single inert argv token, the value of `-p`), but it **does** reintroduce a
@@ -23,10 +57,9 @@
     slices + deferred **S23**), inserted before the Definition of done.
   - **Project CLAUDE.md** — **I5** + the `claudeEnabled`-defaults-OFF / `fullBypass`-warning / prompt-is-
     contained-not-validated guidance added to the security-invariant list.
-  - **Nothing implemented.** No `Core/ClaudeInvocation`, no `ClaudeRunning`, no `claudeEnabled` in
-    `ConfigStore`, no `/claude` routing — mirrors the `d481271` "docs-only planning" precedent (S15–S19).
-    `/claude` is not matchable; the suite is unchanged (292 tests). **Confirm exact Claude Code flags
-    against current docs before wiring S20** — they evolve.
+  - **That commit was docs-only** (suite unchanged at 292 tests), mirroring the `d481271` "docs-only
+    planning" precedent (S15–S19). The **S20 mechanism has since landed** (see the top entry); S21/S22
+    remain.
 - **Enhancement (post-S19) — Settings → Repos "Add repo" uses a native folder browser.** The repo
   working directory is now **picked from an `NSOpenPanel`**, not hand-typed, so it always resolves to
   a directory that actually exists (a typo can't create a bogus repo root the dev commands would run
@@ -434,11 +467,13 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S20 — Claude agent foundation** (agent-action epic S20–S22, planned in PLAN.md /
-  SPEC §4b this session; not started). Foundation only: `ClaudeProfile` + `claudeEnabled` in
-  `ConfigStore`, pure `ClaudeInvocation.build`, `protocol ClaudeRunning` + fake + thin
-  `ProcessClaudeRunner` — no `/claude` command routable yet. All v1 slices S0–S19 remain complete;
-  besides S20, the optional follow-ups still stand (none blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
+- **Next slice:** **S21 — `/claude` command wiring** (agent-action epic). Route `/claude <prompt>`
+  through the guard (gate: armed **AND** `claudeEnabled` **AND** active repo, else `.invalidParameters`)
+  and `AppCoordinator` (run via `ClaudeRunning` with cwd = active repo, format via S4, secret-free audit
+  line), and advertise `/claude` via `setMyCommands` only while enabled. The S20 mechanism
+  (`ClaudeInvocation`/`ClaudeRunning`/`FakeClaudeRunner`/config) is ready; S22 is the Settings pane.
+  All v1 slices S0–S19 remain complete; besides the epic, the optional follow-ups still stand (none
+  blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
   — needs a bundle-id + built-product-path added to `RepoConfig` + Settings (deferred this session,
   SPEC §4a note); (b) per-second live menu-bar countdown (status refreshes on audit events, not a
   timer); (c) a real-Keychain/UserDefaults launch smoke; (d) a live per-poll connection indicator
@@ -483,7 +518,7 @@
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ✅ done |
 | S18  | xcodebuild (`/build`) | ✅ done |
 | S19  | Simulator run (`/sim`) | ✅ done |
-| S20  | Claude agent foundation *(agent-action epic — planned, docs only)* | ☐ not started |
+| S20  | Claude agent foundation *(agent-action epic)* | ✅ done |
 | S21  | `/claude` command wiring | ☐ not started |
 | S22  | Settings: Claude capability pane | ☐ not started |
 | S23  | *(deferred)* persistent session + streaming + `/kill` | ☐ deferred |
@@ -491,15 +526,36 @@
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _The **S13** design-conformance epic (S13a–S13f) and the **S15–S19** dev-workflow epic (parameterized
-actions) are both complete — **all v1 slices (S0–S19) are done and implemented.** A new **agent-action
-epic (S20–S22, + deferred S23)** is now **planned in the docs only** (SPEC §4b, PLAN, project CLAUDE.md)
-and not yet implemented — S20 is the next slice. Other remaining items are optional follow-ups (see
-"Next" below)._
+actions) are both complete — **all v1 slices (S0–S19) are done and implemented.** The **agent-action
+epic (S20–S22, + deferred S23)** is now **in progress**: **S20 (foundation) is done**; **S21**
+(`/claude` wiring) is next, then **S22** (Settings pane). Other remaining items are optional follow-ups
+(see "Next" below)._
 
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-19 — S20: **`ClaudeInvocation.build` returns a value struct — a superset of SPEC §7's
+  `(executable, argv)`.** It also carries `workingDirectory` (= repoRoot, the cwd that bounds Claude
+  Code's file reach) and `timeout`, which the runner needs. The prompt is bound to `-p` and placed
+  **last**, so I5 is a one-line invariant: `arguments.last == prompt`, immediately preceded by `-p`,
+  exactly one `-p`. Empty/whitespace prompt → nil (builds nothing).
+- 2026-07-19 — S20: **Reused the S7 spawn core via a new `Execution/ProcessSpawner`, not a duplicate.**
+  Both `ProcessCommandRunner` (allowlist path) and `ProcessClaudeRunner` (agent path) delegate to one
+  audited execve/timeout/hygiene site (I1/I4); `ProcessCommandRunner`'s `CommandRunnerTests` stayed
+  green through the extraction. Kept the agent path on its own `ClaudeRunning` seam (not `CommandRunning`)
+  so the unvalidated free-text prompt never enters an `Action` — the fixed-allowlist world stays
+  "arguments are always fixed or validated," and S21's coordinator gets a clean fake to assert I5 against.
+- 2026-07-19 — S20: **`editsInRepo` denies ALL Bash (allow-list), stricter than SPEC §4b's "destructive
+  bash denied."** An allow-list beats a fragile blocklist of destructive commands; the profile still
+  permits Read/Grep/Glob/Edit/Write. SPEC §4b wording trued-up to record this (a safe narrowing).
+- 2026-07-19 — S20: **Profiles assume headless `-p` auto-DENIES non-allowlisted tools (never hangs);
+  flag spellings confirmed via a `claude-code-guide` pass but NOT yet run against the real CLI.** An
+  unattended run must never block on a permission prompt. S20 is a pure builder + a `/bin/echo`-stand-in
+  smoke, so its tests pin the chosen flag *mapping*, not Claude Code's live behavior — the guide flagged
+  some uncertainty on `--permission-mode` values (unused; we rely on `--allowedTools`/`--disallowedTools`
+  + `--dangerously-skip-permissions`, which are robust). **Manual smoke against installed Claude Code is a
+  prerequisite for enabling in S22** (confirm no-hang + exact flags).
 - 2026-07-08 — S19: **`/sim` is build → boot → reveal, not PLAN's `boot → install → launch`.** The
   literal `simctl install <path>` / `launch <bundle-id>` need a built-product path + app bundle-id that
   v1's `RepoConfig` (name/root/scheme/destination/simulatorDevice) does not store. Rather than widen the

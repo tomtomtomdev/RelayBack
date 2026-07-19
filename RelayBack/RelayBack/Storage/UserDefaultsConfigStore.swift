@@ -17,6 +17,8 @@ struct UserDefaultsConfigStore: ConfigStore {
     private let defaults: UserDefaults
     private let key = "allowlist"
     private let reposKey = "repos"
+    private let claudeEnabledKey = "claudeEnabled"
+    private let claudeProfileKey = "claudeProfile"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -41,5 +43,27 @@ struct UserDefaultsConfigStore: ConfigStore {
     func setRepos(_ repos: [RepoConfig]) {
         guard let data = try? JSONEncoder().encode(repos) else { return }
         defaults.set(data, forKey: reposKey)
+    }
+
+    // Claude config (§4b / S20). Enabled is a plain Bool — absent reads back `false` (fails closed,
+    // I5). The profile carries optional fields, so it is stored as JSON like repos; a missing or
+    // undecodable blob reads back as the fail-closed `ClaudeProfile.default`.
+    func claudeEnabled() -> Bool {
+        defaults.bool(forKey: claudeEnabledKey)
+    }
+
+    func setClaudeEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: claudeEnabledKey)
+    }
+
+    func claudeProfile() -> ClaudeProfile {
+        guard let data = defaults.data(forKey: claudeProfileKey),
+              let profile = try? JSONDecoder().decode(ClaudeProfile.self, from: data) else { return .default }
+        return profile
+    }
+
+    func setClaudeProfile(_ profile: ClaudeProfile) {
+        guard let data = try? JSONEncoder().encode(profile) else { return }
+        defaults.set(data, forKey: claudeProfileKey)
     }
 }

@@ -151,7 +151,8 @@ safety boundary.
 - **Non-interactive, profile-bounded.** Spawned as `claude -p <prompt>` with a configured
   **permission profile**:
   - `restricted` — read/search tools only (no edits, no bash). *(default)*
-  - `editsInRepo` — edits allowed, destructive bash denied.
+  - `editsInRepo` — edits allowed; bash denied. *(v1 realizes "destructive bash denied" as an
+    allow-list that denies **all** Bash, rather than a fragile blocklist of destructive commands.)*
   - `fullBypass` — permissions skipped; **explicit opt-in**, surfaced as a warning in Settings.
     This is the posture where arbitrary remote execution is accepted.
 - **Prompt is a single inert argv token.** Passed as the value of `-p` (positionally bound — it can
