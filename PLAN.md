@@ -420,6 +420,75 @@ the full suite is green, and no SPEC §4 invariant is weakened.
 
 ---
 
+## Agent action (S20–S22) — `/claude` headless Claude Code *(added 2026-07-19)*
+
+**Why added:** the operator wants to drive Claude Code from Telegram, not just fixed actions. This
+is a deliberate threat-model change (SPEC §4b): the prompt is the one free-text parameter, contained
+by Claude Code's permission profile + active-repo cwd rather than a validator. Reuses S7 runner
+hygiene, S16 active-repo scoping, S4 output, S9 audit.
+
+**Decisions locked:** one-shot `claude -p` (not a persistent session — that's S23); capability toggle
+`claudeEnabled` **default OFF**; permission profile default `restricted`, `fullBypass` an explicit
+opt-in with a Settings warning; cwd = active repo only (no `--add-dir`); prompt is the value of `-p`
+(single inert token). **Confirm exact Claude Code flags against current docs** before wiring — they
+evolve.
+
+**Scope guard:** no change to I1–I4. New I5 governs `/claude`. Every slice adds an invariant test
+that a hostile prompt (metachars, leading `-`) stays a single argv token and never becomes a
+flag/executable, and that a disabled toggle or missing active repo spawns nothing.
+
+### S20 — Claude agent foundation *(pure + thin I/O; no bot command yet)*
+- **Goal:** the mechanism, tests only — no user-facing command wired.
+  - `ClaudeProfile` (+ `claudeEnabled`) in `ConfigStore`.
+  - Pure `ClaudeInvocation.build(prompt:repoRoot:profile:) -> (executable,[argv])`: `-p <prompt>` +
+    the profile's allowed/denied-tool / permission-mode flags; prompt is a single token; disabled
+    profile is not buildable.
+  - `protocol ClaudeRunning` + fake; real `ProcessClaudeRunner` (reuses S7 timeout/kill).
+- **Tests first (RED):** prompt with shell metachars / leading `-` stays one argv token, never a
+  flag; each profile maps to its expected flag set; empty prompt rejected; runner honors cwd +
+  timeout (a `/bin/echo`-style stand-in under the `ClaudeRunning` fake, plus a real-runner smoke
+  against a trivial binary); no command matchable yet (proven by a test).
+- **Done when:** foundation tests green; `/claude` not yet routable.
+
+### S21 — `/claude` command wiring
+- **Goal:** route `/claude <prompt>` through the guard + coordinator.
+  - `AuthGuard` gates: armed **AND** `claudeEnabled` **AND** active repo, else
+    `.invalidParameters(reason)` (enable-in-Settings / select-a-repo / empty-prompt).
+  - `AppCoordinator` runs it via `ClaudeRunning` (cwd = active repo), formats output (reuse S4),
+    writes the secret-free audit line.
+  - Advertise `/claude` via `setMyCommands` only while enabled.
+- **Tests first (RED):** disabled → refused, runner **not** called, audit notes it; armed + enabled
+  + repo → runner called with the S20 invocation; no active repo → refused; oversized output →
+  document; audit line carries no prompt/output/secret; invariant test (I5) — none of {disabled,
+  disarmed, no-repo} spawns.
+- **Done when:** guard + coordinator scenario tests green; end-to-end with fakes proves I5.
+
+### S22 — Settings: Claude capability pane
+- **Goal:** a **Claude** pane (or section): the `claudeEnabled` toggle (default OFF), a
+  permission-profile picker (`restricted` / `editsInRepo` / `fullBypass` — the last with a red
+  warning subtitle), `executablePath` (folder/file picker, reuse the S-post-19 `FolderPicking` seam
+  pattern), and the agent timeout. `@Observable` view-model.
+- **Decision to make first:** does enabling/disabling at runtime hot-reload the guard + re-advertise
+  commands (like the S12 allowlist decision), or apply on next arm? Record it. Recommend hot-reload
+  for parity with repos/allowlist.
+- **Tests first (RED):** view-model — toggle + profile round-trip through `ConfigStore`;
+  `fullBypass` selection sets the warning flag; disabling clears advertisement intent. Thin pickers
+  Preview-verified.
+- **Done when:** pane usable in a Preview; view-model tests green; toggling reaches the live guard
+  per the recorded decision.
+
+**S20–S22 done when:** with `claudeEnabled` on, an armed operator can `/cd` to a repo and
+`/claude <prompt>`, the prompt is a single inert argv token (no shell, proven by an invariant test),
+output returns via the existing formatter, the run is audited secret-free, the suite is green, and
+only I5 is added — I1–I4 unchanged.
+
+### S23 — *(deferred)* persistent session + streaming + `/kill`
+- A long-lived Claude Code session fed turn-by-turn with streamed partial output and a `/kill`.
+  Different architecture (stateful session actor, output streaming, backpressure) than the one-shot
+  model above; closes the §10 streaming item. Not v1.
+
+---
+
 ## Definition of done (whole project, v1)
 
 All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended

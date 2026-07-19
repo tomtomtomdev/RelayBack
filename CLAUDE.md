@@ -63,6 +63,13 @@ one, stop and flag it.
   never hard-coded, logged, written to the audit log, or sent to Telegram.
 - **I4 — Never elevate.** `Process` runs as the normal user with a restricted PATH; never
   root, never with privilege escalation.
+- **I5 — Agent action is gated (SPEC §4b, S20+).** `/claude` runs only if `claudeEnabled` AND
+  armed AND an active repo is selected; spawned non-interactively, cwd = that repo root, configured
+  permission profile, never elevated. Absent any, nothing spawns. `claudeEnabled` **defaults OFF**;
+  `fullBypass` is never the default and must carry a visible warning. The `/claude` prompt is the
+  sole free-text parameter — it is contained by the permission profile + active-repo cwd, never by
+  pretending to validate it. Never pass it through a shell or into any argv position other than the
+  value of `-p`.
 
 When you add a slice that touches execution, auth, or storage, add a test that asserts the
 relevant invariant still holds.

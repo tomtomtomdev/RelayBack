@@ -5,6 +5,28 @@
 
 ## Current state
 
+- **S20–S22 planned (docs only, NOT implemented) — agent action `/claude` (headless Claude Code).**
+  A deliberate **threat-model change** was scoped into the docs from
+  `relayback-claude-agent-amendment.md`: `/claude <prompt>` runs the Claude Code CLI headless in the
+  **active repo**, gated by its own capability toggle. It does **not** add a shell (I1's letter holds
+  — the prompt is a single inert argv token, the value of `-p`), but it **does** reintroduce a
+  *bounded* form of arbitrary execution via a restricted agent, contained by Claude Code's permission
+  profile + active-repo cwd rather than a validator. Amendments applied this session:
+  - **SPEC.md** — §2 both execution non-goals annotated; new **§4b Agent action** (controls: default-OFF
+    `claudeEnabled`, active-repo cwd, `restricted`/`editsInRepo`/`fullBypass` profiles, single-token
+    prompt, reused execution hygiene, secret-free audit); new invariant **I5** added to the §4 list
+    (full elaboration in §4b, cross-referenced — a minor structural sharpening vs. the amendment, which
+    put I5 only in §4b); `/claude` in §5 grammar; **FR-11** in §6; `ClaudeInvocation`/`ClaudeRunning`/
+    `ClaudeProfile` in §7; §10 relabeled (§4b partly realizes the "confirmation-gated arbitrary
+    execution" future item; streaming + `/kill` remains the open item **S23** would close).
+  - **PLAN.md** — new **Agent action (S20–S22)** section (why, decisions-locked, scope guard, the three
+    slices + deferred **S23**), inserted before the Definition of done.
+  - **Project CLAUDE.md** — **I5** + the `claudeEnabled`-defaults-OFF / `fullBypass`-warning / prompt-is-
+    contained-not-validated guidance added to the security-invariant list.
+  - **Nothing implemented.** No `Core/ClaudeInvocation`, no `ClaudeRunning`, no `claudeEnabled` in
+    `ConfigStore`, no `/claude` routing — mirrors the `d481271` "docs-only planning" precedent (S15–S19).
+    `/claude` is not matchable; the suite is unchanged (292 tests). **Confirm exact Claude Code flags
+    against current docs before wiring S20** — they evolve.
 - **Enhancement (post-S19) — Settings → Repos "Add repo" uses a native folder browser.** The repo
   working directory is now **picked from an `NSOpenPanel`**, not hand-typed, so it always resolves to
   a directory that actually exists (a typo can't create a bogus repo root the dev commands would run
@@ -412,8 +434,11 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **none — all planned v1 slices (S0–S19) are complete.** No epic is open. Remaining
-  work is optional follow-ups (none blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
+- **Next slice:** **S20 — Claude agent foundation** (agent-action epic S20–S22, planned in PLAN.md /
+  SPEC §4b this session; not started). Foundation only: `ClaudeProfile` + `claudeEnabled` in
+  `ConfigStore`, pure `ClaudeInvocation.build`, `protocol ClaudeRunning` + fake + thin
+  `ProcessClaudeRunner` — no `/claude` command routable yet. All v1 slices S0–S19 remain complete;
+  besides S20, the optional follow-ups still stand (none blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
   — needs a bundle-id + built-product-path added to `RepoConfig` + Settings (deferred this session,
   SPEC §4a note); (b) per-second live menu-bar countdown (status refreshes on audit events, not a
   timer); (c) a real-Keychain/UserDefaults launch smoke; (d) a live per-poll connection indicator
@@ -458,12 +483,18 @@
 | S17  | Git commands (`/gitstatus`/`/branch`/`/checkout`/`/pull`/`/push`/`/commit`) | ✅ done |
 | S18  | xcodebuild (`/build`) | ✅ done |
 | S19  | Simulator run (`/sim`) | ✅ done |
+| S20  | Claude agent foundation *(agent-action epic — planned, docs only)* | ☐ not started |
+| S21  | `/claude` command wiring | ☐ not started |
+| S22  | Settings: Claude capability pane | ☐ not started |
+| S23  | *(deferred)* persistent session + streaming + `/kill` | ☐ deferred |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _The **S13** design-conformance epic (S13a–S13f) and the **S15–S19** dev-workflow epic (parameterized
-actions) are both complete. **All planned v1 slices (S0–S19) are done.** No epic is open; remaining
-items are optional follow-ups (see "Next" below)._
+actions) are both complete — **all v1 slices (S0–S19) are done and implemented.** A new **agent-action
+epic (S20–S22, + deferred S23)** is now **planned in the docs only** (SPEC §4b, PLAN, project CLAUDE.md)
+and not yet implemented — S20 is the next slice. Other remaining items are optional follow-ups (see
+"Next" below)._
 
 ## Decisions & deviations
 

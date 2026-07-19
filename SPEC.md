@@ -23,6 +23,11 @@ sends stdout/stderr/exit-code back to the chat.
 
 - **No arbitrary shell.** User text never reaches a shell. Only allowlisted actions run.
   (Arbitrary/confirmation-gated execution is a possible *future* phase, not v1.)
+  *(Amended for the agent action, S20+: `/claude` runs the **Claude Code** CLI as a fixed
+  executable with the prompt as a single argv token — no `/bin/sh`. Claude Code is itself an
+  agent that can run tools, so this reintroduces **bounded arbitrary execution via a restricted
+  agent**, scoped to the active repo and gated by a separate capability toggle. See §4b. "No
+  shell, ever" (I1) is unchanged.)*
 - **No arbitrary/free-text command parameters.** Actions accept **only validated argv
   parameters** (see §4a): every parameter is passed as a fixed `Process` argv position —
   never through a shell — and must pass a strict validator (enum / regex / path drawn from a
@@ -30,6 +35,9 @@ sends stdout/stderr/exit-code back to the chat.
   text never fills the executable slot and never an unvalidated argv position. (Amended
   2026-07-03 for the dev-workflow actions — S15+. This is the "constrained enum parameters"
   future phase §10 anticipated, now scoped in deliberately; arbitrary shell remains out.)
+  *(Amended S20+: the `/claude` prompt is the **one** free-text parameter in the system. It is
+  unvalidatable by design, so it is **not** a §4a validated slot — it is contained instead by
+  what Claude Code is permitted to do, §4b, not by a RelayBack validator.)*
 - **No webhooks / inbound network server.** Outbound long-polling only.
 - **No multi-tenant / multi-Mac fleet.** One operator, one Mac.
 - **No notarization/sandbox in v1.** Personal local install. (Re-evaluate before sharing.)
@@ -80,6 +88,10 @@ sends stdout/stderr/exit-code back to the chat.
 - I2. No action executes unless: `from.id` ∈ allowlist **AND** session is ARMED.
 - I3. Token and TOTP secret are read only from Keychain; never logged or sent to Telegram.
 - I4. Process is never spawned with elevated privileges.
+- I5. `/claude` (§4b) runs only if `claudeEnabled` **AND** session is ARMED **AND** an active repo
+  is selected. It is spawned non-interactively, cwd = that repo's root, with the configured
+  permission profile, never elevated. Absent any of these, nothing spawns. (Added S20+ — a
+  deliberate threat-model change; see §4b.)
 
 ### 4a. Validated parameters & working directory (dev-workflow actions, S15+)
 
@@ -123,6 +135,47 @@ to *mutating git state and triggering builds in the configured repos*. It does *
 shell, arbitrary file writes, arbitrary executables, or pushes to arbitrary remotes. Accepted
 for single-operator personal use; revisit before any multi-user or shared deployment.
 
+### 4b. Agent action (`/claude`, S20+)
+
+`/claude <prompt>` spawns Claude Code non-interactively in the active repo and returns its
+output. Because the operator is remote and cannot answer interactive permission prompts, Claude
+Code runs headless with a pre-configured permission profile — so the profile, not a human, is the
+safety boundary.
+
+**Controls (all must hold, in addition to I2's arm + identity gates):**
+- **Capability toggle, default OFF.** `claudeEnabled` (ConfigStore). While false, `/claude` is not
+  advertised and is refused (`.invalidParameters("enable Claude in Settings")`) — nothing spawns.
+- **Active repo required.** cwd = the active repo's absolute root (S16). No active repo →
+  `.invalidParameters("select a repo first")`. Claude Code is **not** given additional directories,
+  so its file reach is the configured repo.
+- **Non-interactive, profile-bounded.** Spawned as `claude -p <prompt>` with a configured
+  **permission profile**:
+  - `restricted` — read/search tools only (no edits, no bash). *(default)*
+  - `editsInRepo` — edits allowed, destructive bash denied.
+  - `fullBypass` — permissions skipped; **explicit opt-in**, surfaced as a warning in Settings.
+    This is the posture where arbitrary remote execution is accepted.
+- **Prompt is a single inert argv token.** Passed as the value of `-p` (positionally bound — it can
+  never become a flag; there is no shell, so metacharacters are literal). Operator text never fills
+  the executable slot, a permission flag, or any other argv position.
+- **Execution hygiene reused.** Normal user (never root), restricted PATH, single-action
+  concurrency, a dedicated (longer) timeout that kills the run. I4 unchanged.
+- **Audit.** One line: timestamp, `from.id`, `claude` + repo name + profile, exit code. No prompt
+  body, no output, no secrets. (The prompt is already visible to Telegram per §4; the audit stays
+  secret-free like every other entry.)
+
+**New invariant — I5** (also in §4's invariant list): `/claude` runs only if `claudeEnabled`
+**AND** armed **AND** an active repo is selected. It is spawned non-interactively, cwd = that
+repo's root, with the configured permission profile, never elevated. Absent any of these, nothing
+spawns.
+
+**Threat-model note.** This widens the worst-case-on-full-auth-bypass from "mutating git state +
+builds in the configured repos" (§4a) to "**whatever the configured permission profile lets Claude
+Code do within the active repo**." In `fullBypass` that is effectively arbitrary execution scoped
+to that repo's directory. It does not grant a login shell elsewhere, root, or reach outside the
+active repo. Accepted for single-operator personal use with `claudeEnabled` an explicit, default-off
+choice; revisit before any shared deployment. A hard timeout-kill mid-run can leave the repo in a
+partially-edited state — acceptable for v1; streaming + `/kill` is deferred (§10).
+
 ## 5. Command grammar (operator-facing)
 
 Control commands (handled internally, always available to allowlisted users):
@@ -145,6 +198,11 @@ Dev-workflow commands (§4a, run in the active repo; require `/cd` first):
 - `/sim` — build → boot the configured simulator device → reveal Simulator.app; no argument,
   stops on the first failing step (S19).
 
+Agent command (§4b, run in the active repo; requires `/cd` first):
+- `/claude <prompt>` — run Claude Code headless in the active repo with the configured permission
+  profile; returns its output. Requires `claudeEnabled` (§4b) and an armed session with an active
+  repo. Advertised via `setMyCommands` only while enabled (S20+).
+
 ## 6. Functional requirements
 
 - **FR-1 Polling.** Continuously long-poll `getUpdates` with an advancing `offset`;
@@ -165,6 +223,11 @@ Dev-workflow commands (§4a, run in the active repo; require `/cd` first):
   the TOTP secret (as scannable `otpauth://` QR), toggle login-item, and view recent audit.
 - **FR-10 Lifecycle.** Start/stop polling with app run state; optional launch-at-login via
   `SMAppService`. No Dock icon (`LSUIElement`).
+- **FR-11 Agent action.** When `claudeEnabled` and armed with an active repo, `/claude <prompt>`
+  spawns `claude -p <prompt>` (profile flags per §4b) with cwd = active repo root, captures
+  stdout/stderr/exit code under the agent timeout, delivers via the existing formatter
+  (chunk-or-document), and writes a secret-free audit line. Disabled or no active repo → an
+  `.invalidParameters` reply, nothing spawned.
 
 ## 7. Architecture & modules
 
@@ -175,9 +238,9 @@ testable with fakes — no live network or real process spawning in tests.
 ```
 RelayBack/
 ├── App/         RelayBackApp (entry), AppCoordinator (orchestration brain)
-├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock   ← pure, TDD-first
+├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock, ClaudeInvocation   ← pure, TDD-first
 ├── Telegram/    TelegramTransport (protocol), TelegramClient (URLSession), TelegramModels
-├── Execution/   CommandRunning (protocol), ProcessCommandRunner (Process impl)
+├── Execution/   CommandRunning (protocol), ProcessCommandRunner (Process impl), ClaudeRunning (+ ProcessClaudeRunner)
 ├── Storage/     KeychainStore (protocol + impl), AuditLog
 ├── Features/    MenuBar/, Settings/   ← SwiftUI views
 └── Resources/   Assets, RelayBack.entitlements
@@ -201,6 +264,13 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
 - **AuditLog** — append-only writer; line formatting is pure/testable.
 - **AppCoordinator** — wires transport→AuthGuard→registry→runner→formatter→transport.
   Fully unit-testable by injecting fakes for every protocol.
+- **ClaudeInvocation** (Core, S20+) — pure builder `(prompt, repoRoot, profile) -> (executable,
+  argv)`; keeps the prompt a single argv token and maps each permission profile to its flag set.
+  No I/O.
+- **ClaudeRunning** (Execution, S20+) — `protocol ClaudeRunning { run(prompt:, repoRoot:, profile:)
+  async -> CommandResult }` with an in-memory fake; real `ProcessClaudeRunner` reuses the S7
+  `Process` timeout/kill machinery. `ClaudeProfile` config (`executablePath`, `permissionProfile`,
+  `timeout`, optional `model`) + `claudeEnabled` live in `ConfigStore`.
 
 ## 8. Tech & platform decisions
 
@@ -222,6 +292,9 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
 
 - ~~Constrained enum parameters for actions (e.g. `/tail <known-service>`).~~ **Scoped in
   2026-07-03 as the dev-workflow actions (S15+); see §4a.**
-- Phase-2 confirmation-gated arbitrary execution (inline-keyboard ✅/❌).
+- Phase-2 confirmation-gated arbitrary execution (inline-keyboard ✅/❌). **Partly realized
+  2026-07-19 by the agent action §4b — `/claude` is the restricted-agent form of remote execution
+  (still not a shell), gated by a capability toggle rather than a per-run confirmation.**
 - Developer ID signing + notarization if the app is ever shared.
-- Streaming partial output + `/kill` for long-running actions.
+- Streaming partial output + `/kill` for long-running actions. **The open item S23 would close (a
+  persistent Claude Code session with streamed output + `/kill`); §4b's `/claude` is one-shot.**
