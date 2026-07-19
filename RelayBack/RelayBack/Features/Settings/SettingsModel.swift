@@ -66,6 +66,35 @@ final class SettingsModel {
     /// Draft simulator device (optional, for `/sim`).
     var newRepoSimulator = ""
 
+    // MARK: - Claude agent action (§4b / S22 — the capability pane's editable state)
+    //
+    // Loaded from and persisted through the `ConfigStore`, mirroring the allowlist/repos. Every edit
+    // persists **and** fires `onClaudeConfigChanged`, so the composition root hot-reloads the running
+    // guard and re-advertises `/claude` immediately (S22 decision — parity with the allowlist/repos
+    // hot-reload, not "apply on next arm"). `claudeEnabled` defaults OFF and `fullBypass` is never the
+    // default (invariant I5) — the fail-closed `ConfigStore.default` guarantees both.
+
+    /// Whether the `/claude` agent action is enabled. OFF until the operator deliberately opts in (I5).
+    private(set) var claudeEnabled: Bool
+    /// The permission posture a headless `/claude` run is bounded by. `.fullBypass` is the warned opt-in.
+    private(set) var claudePermission: ClaudePermissionProfile
+    /// Absolute path to the Claude Code executable; picked from a file browser (S22), never typed, so
+    /// the binary that gets spawned is a real file the operator pointed at rather than a mistyped string.
+    private(set) var claudeExecutablePath: String
+    /// Wall-clock limit for an agent run, in seconds (an agent turn can take minutes).
+    private(set) var claudeTimeout: TimeInterval
+    /// The persisted model override (`--model`), preserved across edits — the pane doesn't edit it, so
+    /// it must round-trip rather than be dropped when the profile is rebuilt from the pane's fields.
+    private var claudeModel: String?
+
+    /// Called after every Claude-config change with the new `(enabled, profile)`, so the composition
+    /// root can hot-reload the running guard + re-advertise `/claude` (S22), mirroring `onReposChanged`.
+    var onClaudeConfigChanged: ((Bool, ClaudeProfile) -> Void)?
+
+    /// True when the selected profile skips all permission checks — drives the pane's red warning so
+    /// `fullBypass` is never chosen without a visible caution (I5).
+    var claudeShowsBypassWarning: Bool { claudePermission == .fullBypass }
+
     /// Live transport reachability shown in the Connection pane (S13f). The composition root
     /// (`AppRuntime`) probes the bot at startup and pushes the result here; the pane renders it via
     /// `ConnectionStatePresentation`. Starts `.connecting` until the first probe resolves.
@@ -107,6 +136,12 @@ final class SettingsModel {
         self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
         self.allowlist = AllowlistDraft(configStore.allowlist())
         self.repos = configStore.repos()
+        let claudeProfile = configStore.claudeProfile()
+        self.claudeEnabled = configStore.claudeEnabled()
+        self.claudePermission = claudeProfile.permission
+        self.claudeExecutablePath = claudeProfile.executablePath
+        self.claudeTimeout = claudeProfile.timeout
+        self.claudeModel = claudeProfile.model
         self.botToken = (try? store.botToken()) ?? ""
         self.totpSecret = (try? store.totpSecret()) ?? nil
         self.launchAtLogin = loginItem.isEnabled
@@ -255,6 +290,54 @@ final class SettingsModel {
     private static func trimmedOrNil(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    }
+
+    // MARK: - Claude agent action (§4b / S22)
+
+    /// Enables or disables the `/claude` capability, persisting and hot-reloading at once (I5).
+    func setClaudeEnabled(_ enabled: Bool) {
+        claudeEnabled = enabled
+        persistClaude()
+    }
+
+    /// Selects the permission posture a headless run is bounded by. `.fullBypass` flips
+    /// `claudeShowsBypassWarning` for the pane's red caution.
+    func setClaudePermission(_ permission: ClaudePermissionProfile) {
+        claudePermission = permission
+        persistClaude()
+    }
+
+    /// Sets the agent run timeout (seconds).
+    func setClaudeTimeout(_ timeout: TimeInterval) {
+        claudeTimeout = timeout
+        persistClaude()
+    }
+
+    /// Opens the native file browser and, on a selection, points the executable path at the chosen
+    /// file (S22) — never typed, so the binary that gets spawned is one the operator actually pointed
+    /// at. A cancelled chooser leaves the config untouched (no persist, no hot-reload).
+    func chooseClaudeExecutable() {
+        guard let path = folderPicker.chooseFile() else { return }
+        claudeExecutablePath = path
+        persistClaude()
+    }
+
+    /// The profile assembled from the pane's fields, preserving the non-edited `model` override.
+    private var currentClaudeProfile: ClaudeProfile {
+        ClaudeProfile(executablePath: claudeExecutablePath,
+                      permission: claudePermission,
+                      timeout: claudeTimeout,
+                      model: claudeModel)
+    }
+
+    /// Persists the toggle + profile and notifies the running guard (S22), mirroring `persistRepos`.
+    /// The hot-reload is the parity decision: a capability edit takes effect without a restart, and
+    /// disabling refuses the next `/claude` at once — the guard gate is the real I5 enforcement.
+    private func persistClaude() {
+        let profile = currentClaudeProfile
+        configStore.setClaudeEnabled(claudeEnabled)
+        configStore.setClaudeProfile(profile)
+        onClaudeConfigChanged?(claudeEnabled, profile)
     }
 
     // MARK: - TOTP secret

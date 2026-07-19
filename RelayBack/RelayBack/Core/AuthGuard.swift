@@ -95,12 +95,14 @@ struct AuthGuard {
     /// Whether the `/claude` agent action is enabled (§4b / S21 — invariant I5). **Defaults OFF**, so
     /// every existing call site/test leaves it disabled and `/claude` refuses until the operator opts
     /// in (S22). This is the capability half of the I5 gate (the arm gate + active-repo are the rest).
-    private let claudeEnabled: Bool
+    /// `var` so a Settings edit can hot-reload it (`updateClaudeConfig`, S22).
+    private var claudeEnabled: Bool
 
     /// The Claude Code profile (executable, permission posture, timeout, model) carried in a
     /// `.runClaude` decision for the coordinator's runner. The guard never spawns — it only gates and
     /// packages the run. Fail-closed default (`restricted`, no executable) keeps I5 safe by default.
-    private let claudeProfile: ClaudeProfile
+    /// `var` so a Settings edit can hot-reload it (`updateClaudeConfig`, S22).
+    private var claudeProfile: ClaudeProfile
 
     init(allowlist: Set<Int64>,
          totpSecret: Data,
@@ -140,6 +142,17 @@ struct AuthGuard {
         if let active = activeRepo, !repos.contains(where: { $0.name == active.name }) {
             activeRepo = nil
         }
+    }
+
+    /// Replaces the `/claude` capability toggle + profile at runtime (S22 — hot-reload from the
+    /// Settings Claude pane), mirroring `updateAllowlist`/`updateRepos`. Arm state and the active
+    /// repo are preserved — capability is orthogonal to the session. Disabling takes effect at once:
+    /// the next `/claude` fails the capability gate and nothing spawns (invariant I5). The guard only
+    /// gates and packages the run, so swapping the profile can only change how a *future* run is
+    /// bounded — it never touches anything already in flight.
+    mutating func updateClaudeConfig(enabled: Bool, profile: ClaudeProfile) {
+        claudeEnabled = enabled
+        claudeProfile = profile
     }
 
     /// Drops the session to disarmed immediately (S13b — the popover's "Disarm now" button). Same

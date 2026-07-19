@@ -500,4 +500,21 @@ struct AppCoordinatorTests {
         #expect(h.transport.sentDocuments.count == 1)   // FR-6: oversized agent output → one document
         #expect(h.transport.sentDocuments.first?.filename == "output.txt")
     }
+
+    @Test func updateClaudeConfigEnablesAPreviouslyRefusedAgentRun() async {
+        // S22 hot-reload: the operator flips the capability on in Settings while armed with an active
+        // repo; the change reaches the live guard, so the next `/claude` now spawns via the runner.
+        let h = makeClaudeHarness(enabled: false)
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude do it"))
+        #expect(h.claudeRunner?.runCount == 0)          // still disabled → nothing spawned yet
+
+        h.coordinator.updateClaudeConfig(enabled: true, profile: claudeProfile)   // toggled in Settings
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude do it"))
+
+        #expect(h.claudeRunner?.runCount == 1)          // now the agent runs
+        #expect(h.claudeRunner?.calls.last?.profile == claudeProfile)
+        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/claude", exitCode: 0) })
+    }
 }

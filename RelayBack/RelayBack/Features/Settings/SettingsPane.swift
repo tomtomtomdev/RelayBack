@@ -14,6 +14,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Equatable {
     case connection
     case allowlist
     case repos
+    case claude
     case security
     case audit
     case general
@@ -26,18 +27,20 @@ enum SettingsPane: String, CaseIterable, Identifiable, Equatable {
         case .connection: return "Connection"
         case .allowlist:  return "Allowlist"
         case .repos:      return "Repos"
+        case .claude:     return "Claude"
         case .security:   return "Security"
         case .audit:      return "Audit"
         case .general:    return "General"
         }
     }
 
-    /// The SF Symbol shown beside the row (handoff icon mapping).
+    /// The SF Symbol shown beside the row (handoff icon mapping; `/claude` uses the AI "sparkles").
     var systemImage: String {
         switch self {
         case .connection: return "wifi"
         case .allowlist:  return "person.2"
         case .repos:      return "folder"
+        case .claude:     return "sparkles"
         case .security:   return "checkmark.shield"
         case .audit:      return "doc.text"
         case .general:    return "gearshape"

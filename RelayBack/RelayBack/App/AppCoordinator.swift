@@ -72,6 +72,13 @@ final class AppCoordinator {
         authGuard.updateRepos(repos)
     }
 
+    /// Applies a runtime `/claude` capability change to the live guard (S22), mirroring
+    /// `updateRepos`. Enabling/disabling or re-profiling the agent action in Settings takes effect
+    /// immediately without a restart; disabling refuses the next `/claude` at once (invariant I5).
+    func updateClaudeConfig(enabled: Bool, profile: ClaudeProfile) {
+        authGuard.updateClaudeConfig(enabled: enabled, profile: profile)
+    }
+
     /// Disarms the live session on demand (S13b — the popover's "Disarm now" button). A subsequent
     /// action is blocked until the operator re-arms via TOTP (invariant I2).
     func disarm() {

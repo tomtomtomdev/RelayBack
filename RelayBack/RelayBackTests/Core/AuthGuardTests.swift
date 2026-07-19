@@ -142,6 +142,48 @@ struct AuthGuardTests {
                 == .runClaude(prompt: hostile, repoRoot: relayback.root, profile: claudeProfile))
     }
 
+    @Test func updateClaudeConfigEnablesADisabledCapabilityWithoutReArming() {
+        // S22 hot-reload (parity with updateAllowlist/updateRepos): flipping the toggle in Settings
+        // reaches the live guard immediately. The operator stays armed with the same active repo —
+        // capability is orthogonal to the session — so the very next `/claude` now resolves.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: false, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        #expect(guardState.authorize(fromId: allowed, text: "/claude summarize the diff")
+                == .invalidParameters("enable Claude in Settings"))
+
+        guardState.updateClaudeConfig(enabled: true, profile: claudeProfile)
+
+        #expect(guardState.isArmed)                               // session preserved
+        #expect(guardState.currentRepo == relayback)             // active repo preserved
+        #expect(guardState.authorize(fromId: allowed, text: "/claude summarize the diff")
+                == .runClaude(prompt: "summarize the diff",
+                              repoRoot: relayback.root, profile: claudeProfile))
+    }
+
+    @Test func updateClaudeConfigDisablesAndSwapsTheProfileForFutureRuns() {
+        // Disabling at runtime refuses the next `/claude` at once (I5). A swapped profile (e.g. the
+        // operator changing the permission posture) is carried by subsequent decisions, never a run
+        // already packaged.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+
+        let bypass = ClaudeProfile(executablePath: "/usr/local/bin/claude",
+                                   permission: .fullBypass, timeout: 600)
+        guardState.updateClaudeConfig(enabled: true, profile: bypass)
+        #expect(guardState.authorize(fromId: allowed, text: "/claude go")
+                == .runClaude(prompt: "go", repoRoot: relayback.root, profile: bypass))
+
+        guardState.updateClaudeConfig(enabled: false, profile: bypass)
+        #expect(guardState.authorize(fromId: allowed, text: "/claude go")
+                == .invalidParameters("enable Claude in Settings"))
+    }
+
     // MARK: - Arming
 
     @Test func armWithBadCodeStaysDisarmed() {

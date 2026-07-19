@@ -255,6 +255,118 @@ struct SettingsModelTests {
         #expect(model.repos.isEmpty)
     }
 
+    // MARK: - Claude agent action (§4b / S22 — capability pane view-state)
+
+    @Test func loadsClaudeConfigFromConfigStore() {
+        let profile = ClaudeProfile(executablePath: "/opt/homebrew/bin/claude",
+                                    permission: .editsInRepo, timeout: 900, model: "opus")
+        let config = InMemoryConfigStore(claudeEnabled: true, claudeProfile: profile)
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        #expect(model.claudeEnabled)
+        #expect(model.claudePermission == .editsInRepo)
+        #expect(model.claudeExecutablePath == "/opt/homebrew/bin/claude")
+        #expect(model.claudeTimeout == 900)
+    }
+
+    @Test func claudeDefaultsOffAndRestrictedWhenUnconfigured() {
+        // I5: with no stored config the pane loads OFF + `restricted` (the fail-closed default), so
+        // nothing is enabled and the dangerous profile is never the default.
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        #expect(model.claudeEnabled == false)
+        #expect(model.claudePermission == .restricted)
+        #expect(model.claudeShowsBypassWarning == false)
+    }
+
+    @Test func setClaudeEnabledPersistsAndNotifies() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: (Bool, ClaudeProfile)?
+        model.onClaudeConfigChanged = { notified = ($0, $1) }
+
+        model.setClaudeEnabled(true)
+        #expect(model.claudeEnabled)
+        #expect(config.claudeEnabled())            // persisted for next launch
+        #expect(notified?.0 == true)               // pushed to the running guard (hot-reload)
+    }
+
+    @Test func disablingClaudeNotifiesWithEnabledFalse() {
+        // The PLAN's "disabling clears advertisement intent": the hot-reload carries enabled=false so
+        // AppRuntime re-advertises without `/claude` and the guard refuses the next one (I5).
+        let config = InMemoryConfigStore(claudeEnabled: true)
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: (Bool, ClaudeProfile)?
+        model.onClaudeConfigChanged = { notified = ($0, $1) }
+
+        model.setClaudeEnabled(false)
+        #expect(model.claudeEnabled == false)
+        #expect(config.claudeEnabled() == false)
+        #expect(notified?.0 == false)
+    }
+
+    @Test func fullBypassSelectionSetsTheWarningFlagAndPersists() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        model.setClaudePermission(.fullBypass)
+        #expect(model.claudeShowsBypassWarning)                       // red-warning flag for the pane
+        #expect(config.claudeProfile().permission == .fullBypass)     // persisted
+
+        model.setClaudePermission(.restricted)
+        #expect(model.claudeShowsBypassWarning == false)
+    }
+
+    @Test func settingTimeoutPersistsAndNotifies() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: ClaudeProfile?
+        model.onClaudeConfigChanged = { _, profile in notified = profile }
+
+        model.setClaudeTimeout(1200)
+        #expect(config.claudeProfile().timeout == 1200)
+        #expect(notified?.timeout == 1200)
+    }
+
+    @Test func chooseClaudeExecutableFillsPathViaFilePickerAndPersists() {
+        let picker = FakeFolderPicker(fileToReturn: "/usr/local/bin/claude")
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config, folderPicker: picker)
+        var notified: ClaudeProfile?
+        model.onClaudeConfigChanged = { _, profile in notified = profile }
+
+        model.chooseClaudeExecutable()
+        #expect(picker.chooseFileCount == 1)
+        #expect(model.claudeExecutablePath == "/usr/local/bin/claude")
+        #expect(config.claudeProfile().executablePath == "/usr/local/bin/claude")
+        #expect(notified?.executablePath == "/usr/local/bin/claude")
+    }
+
+    @Test func cancellingTheExecutableChooserLeavesTheConfigUnchanged() {
+        let picker = FakeFolderPicker(fileToReturn: nil)   // operator cancelled
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config, folderPicker: picker)
+        var notifyCount = 0
+        model.onClaudeConfigChanged = { _, _ in notifyCount += 1 }
+
+        model.chooseClaudeExecutable()
+        #expect(picker.chooseFileCount == 1)
+        #expect(model.claudeExecutablePath == "")   // untouched
+        #expect(notifyCount == 0)                    // no change → no persist, no hot-reload
+    }
+
+    @Test func editingOneFieldPreservesTheOthersInTheReloadedProfile() {
+        // Rebuilding the profile from the pane's fields must not drop the model override (which the
+        // pane doesn't edit) nor an already-chosen executable/timeout.
+        let profile = ClaudeProfile(executablePath: "/opt/claude", permission: .restricted,
+                                    timeout: 600, model: "opus")
+        let config = InMemoryConfigStore(claudeEnabled: false, claudeProfile: profile)
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+
+        model.setClaudeEnabled(true)   // only touches the toggle
+        let persisted = config.claudeProfile()
+        #expect(persisted.executablePath == "/opt/claude")
+        #expect(persisted.timeout == 600)
+        #expect(persisted.model == "opus")            // preserved, not dropped
+    }
+
     @Test func noSecretMeansNoQR() {
         let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
         #expect(model.hasSecret == false)

@@ -118,6 +118,15 @@ final class AppRuntime {
             self?.menuBar.status = statusOf(coordinator)   // reflect the drop immediately
         }
 
+        // S22: a Claude-capability edit in Settings hot-reloads the running guard (parity with the
+        // allowlist/repos hot-reload) and re-advertises `/claude` per the new toggle. The guard gate
+        // is the real I5 enforcement — re-advertisement is best-effort autocomplete, so a failure to
+        // reach Telegram here can't widen capability. `client` is a value type, captured by value.
+        settings.onClaudeConfigChanged = { [weak self] enabled, profile in
+            self?.coordinator?.updateClaudeConfig(enabled: enabled, profile: profile)
+            Task { try? await client.setMyCommands(Self.botCommands(claudeEnabled: enabled)) }
+        }
+
         let loop = PollLoop(transport: client,
                             handler: coordinator,
                             connectionLog: FileConnectionLog(fileURL: Self.connectionLogURL()),

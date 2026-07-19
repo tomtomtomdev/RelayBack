@@ -5,6 +5,46 @@
 
 ## Current state
 
+- **S22 done — Settings Claude capability pane. The agent-action epic (S20–S22) is COMPLETE.** The
+  operator can now flip `/claude` on and configure it entirely from Settings; a toggle edit
+  **hot-reloads the running guard** and re-advertises `/claude` at once (no restart), so the S20/S21
+  machinery is finally reachable in production. New pieces:
+  - **New `SettingsPane.claude`** ("Claude", `sparkles` icon), slotted between Repos and Security. Its
+    `claudePane` (in `SettingsView`) is thin glue: an **Enable /claude** toggle (default OFF), a
+    segmented **permission-profile picker** (`restricted` / `editsInRepo` / `fullBypass`) with a
+    per-profile subtitle, a red **bypass warning** shown only while `fullBypass` is selected (I5 — the
+    dangerous profile is never chosen silently), a **file-chooser executable row** (path is *picked*,
+    never typed), and an **agent-timeout stepper** (1–60 min). Two Previews (restricted / full-bypass).
+  - **`SettingsModel` capability state** — loads `claudeEnabled` + the `ClaudeProfile`
+    (permission/executablePath/timeout, and the non-edited `model` override) from `ConfigStore` at
+    init, defaulting **OFF + `restricted`** when unconfigured (I5). Setters
+    (`setClaudeEnabled`/`setClaudePermission`/`setClaudeTimeout`/`chooseClaudeExecutable`) each persist
+    via `ConfigStore` **and** fire the new `onClaudeConfigChanged(enabled, profile)`. `currentClaudeProfile`
+    rebuilds the profile from the pane's fields while **preserving the `model` override** (so it isn't
+    dropped on an unrelated edit). `claudeShowsBypassWarning` drives the pane's red caution. A cancelled
+    executable chooser is a no-op (no persist, no hot-reload).
+  - **File-chooser seam** — `FolderPicking` gained `chooseFile()` (real `NSOpenPanel` files-only;
+    `FakeFolderPicker.chooseFile`/`fileToReturn`/`chooseFileCount` for tests), reusing the post-S19
+    folder-picker pattern so the spawned executable is a real file the operator pointed at.
+  - **Hot-reload path (the recorded S22 decision — parity with the allowlist/repos, NOT "apply on next
+    arm")** — `AuthGuard` flipped `claudeEnabled`/`claudeProfile` to `var` + gained
+    `mutating func updateClaudeConfig(enabled:profile:)` (arm state + active repo preserved — capability
+    is orthogonal to the session; disabling refuses the next `/claude` at once, I5); `AppCoordinator`
+    gained a `updateClaudeConfig` passthrough (mirrors `updateRepos`); `AppRuntime` wires
+    `settings.onClaudeConfigChanged → coordinator.updateClaudeConfig` **and** re-advertises via
+    `setMyCommands(botCommands(claudeEnabled:))`. The **guard gate is the real I5 enforcement** —
+    re-advertisement is best-effort autocomplete, so a Telegram failure there can't widen capability.
+  - **⚠️ Still a prerequisite before real use:** the **manual Claude Code CLI smoke** (confirm headless
+    `-p` auto-denies non-allowlisted tools / never hangs + the exact flag spellings — see the S20 ⚠️
+    note) has still never run. S22 makes `/claude` *enable-able*; the smoke gates *trusting* it.
+- ✅ **S22 verified green on macOS** (this session): full `RelayBackTests` = **331 tests / 38 suites**
+  passing (+12 vs S21: `AuthGuardTests` (+2) — hot-reload enables a disabled capability without
+  re-arming (session + active repo preserved), and disable/swap-profile carries into future runs (I5);
+  `AppCoordinatorTests` (+1) — `updateClaudeConfig` enables a previously-refused run end-to-end via the
+  fake agent runner; `SettingsModelTests` (+9) — load-from-store, default-OFF/`restricted`,
+  toggle/timeout/permission persist+notify, disable notifies `enabled=false`, `fullBypass` warning
+  flag, file-pick fills+persists / cancel is a no-op, and an unrelated edit preserves the `model`
+  override; `SettingsPaneTests` updated for the new `.claude` case). App builds clean.
 - **S21 done — `/claude` command wiring. The agent action is now routable (gated OFF by default).**
   `/claude <prompt>` flows end-to-end through the guard + coordinator, spawning headless Claude Code in
   the active repo. It is inert in production until S22 adds the Settings toggle (`claudeEnabled` reads
@@ -506,18 +546,14 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S22 — Settings: Claude capability pane** (agent-action epic, final wiring slice). A
-  **Claude** pane/section: the `claudeEnabled` toggle (default OFF), a permission-profile picker
-  (`restricted` / `editsInRepo` / `fullBypass` — the last with a red warning subtitle), `executablePath`
-  (reuse the post-S19 `FolderPicking` seam), and the agent timeout, all `@Observable` + persisted through
-  `ConfigStore`. **Decision to make first (record it):** does toggling at runtime hot-reload the guard +
-  re-advertise commands (S12 allowlist pattern), or apply on next arm/restart? PLAN recommends hot-reload
-  for parity — but note S21 wired NO `updateClaudeConfig` on the guard yet (guard reads config once at
-  `AppRuntime.start()`), so hot-reload means adding that method + a coordinator passthrough (like
-  `updateRepos`). **Before enabling for real:** run the manual Claude Code CLI smoke (no-hang + exact
-  flags, per the S20 ⚠️ note). The S20/S21 machinery (`ClaudeInvocation`/`ClaudeRunning`/guard gate/
-  coordinator/advertisement) is all ready. All v1 slices S0–S19 remain complete; besides the epic, the optional follow-ups still stand (none
-  blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
+- **Next slice:** none required for v1 — **every planned slice S0–S22 is done.** The only planned work
+  left is **S23** (deferred, not v1): a persistent Claude Code session fed turn-by-turn with streamed
+  partial output + a `/kill` — a different (stateful session actor + streaming/backpressure)
+  architecture than the one-shot `claude -p` S20–S22 shipped; it would close the SPEC §10 streaming
+  item. **Gate before trusting `/claude` in production:** the **manual Claude Code CLI smoke** (headless
+  `-p` auto-denies non-allowlisted tools / never hangs + exact flag spellings, per the S20 ⚠️ note) —
+  S22 makes `/claude` enable-able but this has never been run against the live CLI. Besides the epic,
+  the optional follow-ups still stand (none blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
   — needs a bundle-id + built-product-path added to `RepoConfig` + Settings (deferred this session,
   SPEC §4a note); (b) per-second live menu-bar countdown (status refreshes on audit events, not a
   timer); (c) a real-Keychain/UserDefaults launch smoke; (d) a live per-poll connection indicator
@@ -564,16 +600,16 @@
 | S19  | Simulator run (`/sim`) | ✅ done |
 | S20  | Claude agent foundation *(agent-action epic)* | ✅ done |
 | S21  | `/claude` command wiring | ✅ done |
-| S22  | Settings: Claude capability pane | ☐ not started |
+| S22  | Settings: Claude capability pane | ✅ done |
 | S23  | *(deferred)* persistent session + streaming + `/kill` | ☐ deferred |
 
 Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
-_The **S13** design-conformance epic (S13a–S13f) and the **S15–S19** dev-workflow epic (parameterized
-actions) are both complete — **all v1 slices (S0–S19) are done and implemented.** The **agent-action
-epic (S20–S22, + deferred S23)** is now **in progress**: **S20 (foundation) + S21 (`/claude` wiring)
-are done**; **S22** (Settings capability pane) is next. Other remaining items are optional follow-ups
-(see "Next" below)._
+_The **S13** design-conformance epic (S13a–S13f), the **S15–S19** dev-workflow epic (parameterized
+actions), and the **agent-action epic (S20–S22)** are all complete — **every v1 slice (S0–S22) is
+done and implemented**; only **S23** (persistent session + streaming + `/kill`) remains **deferred**
+(not v1). Other remaining items are optional follow-ups (see "Next" below), plus the standing manual
+Claude Code CLI smoke before `/claude` is trusted in production._
 
 ## Decisions & deviations
 
@@ -616,6 +652,21 @@ _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-li
   deferred (SPEC §4b trued-up to record this) to land once the profile is a first-class operator-
   configured value (S22+). I3/I5 hold either way — the token+exit event structurally can't carry the
   prompt or output.
+- 2026-07-19 — S22: **Toggling `/claude` in Settings HOT-RELOADS the live guard (parity with the
+  allowlist/repos), NOT "apply on next arm/restart".** This resolves the explicit S22 decision the
+  S21 note left open, taking PLAN's recommended path. `AuthGuard` flipped `claudeEnabled`/`claudeProfile`
+  to `var` + gained `mutating func updateClaudeConfig(enabled:profile:)`; `AppCoordinator` got a
+  `updateClaudeConfig` passthrough; `AppRuntime` wires `onClaudeConfigChanged` to it and re-advertises
+  via `setMyCommands`. Arm state + active repo are **preserved** — capability is orthogonal to the
+  session (same reasoning as `updateAllowlist` preserving arm). Disabling refuses the next `/claude` at
+  once (I5). The **guard gate is the enforcement**; the `setMyCommands` re-advertisement is best-effort
+  autocomplete, so a Telegram failure there can never widen capability.
+- 2026-07-19 — S22: **The executable path is *picked from a file browser*, never typed** — `FolderPicking`
+  gained `chooseFile()` (files-only `NSOpenPanel`) alongside the S-post-19 `chooseFolder()`. Same
+  rationale as the repo-root chooser: the binary that actually gets spawned should be a real file the
+  operator pointed at, not a mistyped string. The pane doesn't edit the `--model` override, so
+  `SettingsModel` round-trips it through `currentClaudeProfile` rather than dropping it when the profile
+  is rebuilt from the pane's fields.
 - 2026-07-19 — S20: **`ClaudeInvocation.build` returns a value struct — a superset of SPEC §7's
   `(executable, argv)`.** It also carries `workingDirectory` (= repoRoot, the cwd that bounds Claude
   Code's file reach) and `timeout`, which the runner needs. The prompt is bound to `-p` and placed

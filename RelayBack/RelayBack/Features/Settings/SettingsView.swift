@@ -89,6 +89,7 @@ struct SettingsView: View {
         case .connection: connectionPane
         case .allowlist:  allowlistPane
         case .repos:      reposPane
+        case .claude:     claudePane
         case .security:   securityPane
         case .audit:      auditPane
         case .general:    generalPane
@@ -473,6 +474,156 @@ struct SettingsView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
     }
 
+    // MARK: - Claude pane (S22 — the §4b agent-action capability)
+    //
+    // Thin glue over `SettingsModel`: the toggle, permission picker, executable file chooser, and
+    // timeout stepper each go through a model setter that persists + hot-reloads the running guard
+    // (S22). `fullBypass` surfaces a red warning so the dangerous profile is never chosen silently
+    // (invariant I5). The executable is picked from a file browser (reusing the `FolderPicking` seam),
+    // never typed. All state/validation lives in the model; this renders it.
+
+    private var claudePane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                paneHeader("Claude agent",
+                           detail: "Run a headless Claude Code agent in the active repo from Telegram with /claude <prompt>. Off by default; the prompt is bounded by the permission profile and the repo, not by a validator.")
+
+                claudeEnableCard
+
+                Text("The agent runs only while armed, with a repo selected via /cd, as the normal user.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+
+                permissionPicker
+                if model.claudeShowsBypassWarning { bypassWarning }
+                claudeExecutableRow
+                claudeTimeoutRow
+
+                if let error = model.lastError {
+                    Text(error).font(.caption).foregroundStyle(Theme.danger)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+        }
+    }
+
+    private var claudeEnableCard: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Enable /claude").font(.system(size: 13.5))
+                Text("When on, an armed operator can run a Claude Code agent in the active repo.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 12)
+            Toggle("", isOn: Binding(
+                get: { model.claudeEnabled },
+                set: { model.setClaudeEnabled($0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(Theme.armedGreen)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
+    private var permissionPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PERMISSION PROFILE")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6B7280))
+                .kerning(0.5)
+            Picker("", selection: Binding(
+                get: { model.claudePermission },
+                set: { model.setClaudePermission($0) }
+            )) {
+                Text("Restricted").tag(ClaudePermissionProfile.restricted)
+                Text("Edits in repo").tag(ClaudePermissionProfile.editsInRepo)
+                Text("Full bypass").tag(ClaudePermissionProfile.fullBypass)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            Text(claudePermissionSubtitle)
+                .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+        }
+    }
+
+    private var claudePermissionSubtitle: String {
+        switch model.claudePermission {
+        case .restricted:  return "Read & search only — no edits, no shell."
+        case .editsInRepo: return "Read, search & edit files in the repo; shell disabled."
+        case .fullBypass:  return "All permission checks skipped — arbitrary execution scoped to the repo."
+        }
+    }
+
+    private var bypassWarning: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+            Text("Full bypass skips every permission check — the agent can run any command in the active repo. Use only on a repo you fully trust.")
+                .font(.system(size: 12.5))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Theme.danger)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.danger.opacity(0.1)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.danger.opacity(0.3)))
+    }
+
+    /// The executable is chosen from a native file browser (S22), never typed — so the binary that
+    /// gets spawned is a real file the operator pointed at.
+    private var claudeExecutableRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CLAUDE CODE EXECUTABLE")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6B7280))
+                .kerning(0.5)
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "terminal")
+                        .foregroundStyle(model.claudeExecutablePath.isEmpty ? Theme.textTertiary : Theme.accent)
+                    Text(model.claudeExecutablePath.isEmpty ? "No executable chosen" : model.claudeExecutablePath)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(model.claudeExecutablePath.isEmpty ? Theme.textTertiary : Theme.textPrimary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 11).padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+
+                Button("Choose…") { model.chooseClaudeExecutable() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+    }
+
+    private var claudeTimeoutRow: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Agent timeout").font(.system(size: 13.5))
+                Text("A run is terminated if it exceeds this — an agent turn can take minutes.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 12)
+            Stepper(value: Binding(
+                get: { model.claudeTimeout },
+                set: { model.setClaudeTimeout($0) }
+            ), in: 60...3600, step: 60) {
+                Text("\(Int(model.claudeTimeout / 60)) min")
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.chip).fill(Theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip).stroke(Theme.cardBorder))
+            }
+        }
+        .padding(.horizontal, 13).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
     // MARK: - General pane (S13e)
 
     private var generalPane: some View {
@@ -696,6 +847,22 @@ private struct SecondaryButtonStyle: ButtonStyle {
     ), initialPane: .repos)
 }
 
+#Preview("Claude — restricted") {
+    SettingsView(model: SettingsModel(
+        store: PreviewSecretStore(),
+        configStore: PreviewConfigStore(claudeEnabled: true, claudeProfile: ClaudeProfile(
+            executablePath: "/opt/homebrew/bin/claude", permission: .restricted, timeout: 600))
+    ), initialPane: .claude)
+}
+
+#Preview("Claude — full bypass warning") {
+    SettingsView(model: SettingsModel(
+        store: PreviewSecretStore(),
+        configStore: PreviewConfigStore(claudeEnabled: true, claudeProfile: ClaudeProfile(
+            executablePath: "/opt/homebrew/bin/claude", permission: .fullBypass, timeout: 1200))
+    ), initialPane: .claude)
+}
+
 #Preview("Connection — connected") {
     let model = SettingsModel(store: PreviewSecretStore())
     model.connectionState = .connected(botUsername: "relayback_bot")
@@ -719,19 +886,26 @@ private final class PreviewSecretStore: SecretStore {
     func setTOTPSecret(_ secret: Data?) throws { self.secret = secret }
 }
 
-/// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist / repos.
+/// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist / repos /
+/// Claude config.
 private final class PreviewConfigStore: ConfigStore {
     private var ids: [Int64]
     private var repoConfigs: [RepoConfig]
-    init(allowlist: [Int64] = [], repos: [RepoConfig] = []) { ids = allowlist; repoConfigs = repos }
+    private var claudeIsEnabled: Bool
+    private var claudeProfileValue: ClaudeProfile
+    init(allowlist: [Int64] = [], repos: [RepoConfig] = [],
+         claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default) {
+        ids = allowlist; repoConfigs = repos
+        claudeIsEnabled = claudeEnabled; claudeProfileValue = claudeProfile
+    }
     func allowlist() -> [Int64] { ids }
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
     func repos() -> [RepoConfig] { repoConfigs }
     func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
-    func claudeEnabled() -> Bool { false }
-    func setClaudeEnabled(_ enabled: Bool) {}
-    func claudeProfile() -> ClaudeProfile { .default }
-    func setClaudeProfile(_ profile: ClaudeProfile) {}
+    func claudeEnabled() -> Bool { claudeIsEnabled }
+    func setClaudeEnabled(_ enabled: Bool) { claudeIsEnabled = enabled }
+    func claudeProfile() -> ClaudeProfile { claudeProfileValue }
+    func setClaudeProfile(_ profile: ClaudeProfile) { claudeProfileValue = profile }
 }
 
 /// A throwaway `AuditReading` so the Audit-pane preview renders a representative, color-coded table.
