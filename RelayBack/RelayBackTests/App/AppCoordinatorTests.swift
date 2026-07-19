@@ -35,6 +35,9 @@ struct AppCoordinatorTests {
         let runner: FakeCommandRunner
         let audit: InMemoryAuditSink
         let clock: TestClock
+        /// Set only by the `/claude` harness (S21) — the agent runner, so a test can assert it was
+        /// (or, for the I5 refusal cases, was NOT) invoked. nil for the fixed-action harnesses.
+        var claudeRunner: FakeClaudeRunner? = nil
     }
 
     private func makeHarness(result: CommandResult = CommandResult(exitCode: 0, stdout: "up 3 days", stderr: "")) -> Harness {
@@ -405,5 +408,96 @@ struct AppCoordinatorTests {
         #expect(h.audit.entries.filter { $0.event == .actionRan(command: "/sim", exitCode: 1) }.count == 1)
         // I3: no step's captured stdout/stderr ever reaches an audit line — only token + exit code.
         #expect(h.audit.entries.allSatisfy { !$0.line.contains("built") && !$0.line.contains("boot failed") })
+    }
+
+    // MARK: - Agent action `/claude` (S21): end-to-end proof of I5
+
+    private let claudeRepo = RepoConfig(name: "app", root: "/Users/op/dev/App")
+    private let claudeProfile = ClaudeProfile(executablePath: "/usr/local/bin/claude",
+                                              permission: .restricted, timeout: 600)
+
+    /// Builds a coordinator whose `/claude` path is backed by a `FakeClaudeRunner`, so a test can
+    /// assert exactly whether the agent runner was reached (I5) and with what prompt/repo/profile.
+    private func makeClaudeHarness(enabled: Bool,
+                                   result: CommandResult = CommandResult(exitCode: 0, stdout: "claude ok", stderr: "")) -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner()
+        let claudeRunner = FakeClaudeRunner(result: result)
+        let audit = InMemoryAuditSink()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                                  clock: clock, idleTimeout: idleTimeout,
+                                  repoConfigs: [claudeRepo],
+                                  claudeEnabled: enabled, claudeProfile: claudeProfile)
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         claudeRunner: claudeRunner, transport: transport,
+                                         audit: audit, clock: clock)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner,
+                       audit: audit, clock: clock, claudeRunner: claudeRunner)
+    }
+
+    @Test func claudeEnabledArmedWithRepoRunsViaTheAgentRunner() async {
+        let h = makeClaudeHarness(enabled: true)
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude summarize the diff"))
+
+        // I5/§4b: the agent runner is reached exactly once, with the prompt (whole), the active-repo
+        // root as cwd, and the configured profile — the fixed-action runner is never touched.
+        #expect(h.claudeRunner?.runCount == 1)
+        #expect(h.runner.runCount == 0)
+        let call = h.claudeRunner?.calls.first
+        #expect(call?.prompt == "summarize the diff")
+        #expect(call?.repoRoot == "/Users/op/dev/App")
+        #expect(call?.profile == claudeProfile)
+
+        // FR-6: the agent's output is formatted and delivered like any other run.
+        let outputMessages = h.transport.sentMessages.filter { $0.chatId == chat }.map { $0.text }
+        #expect(outputMessages.contains { $0.contains("claude ok") && $0.contains("exit 0") })
+
+        // I3/I5: the run is audited by the /claude token + exit code only — never the prompt or output.
+        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/claude", exitCode: 0) })
+        #expect(h.audit.entries.allSatisfy { !$0.line.contains("summarize the diff") && !$0.line.contains("claude ok") })
+    }
+
+    @Test func claudeDisabledIsRefusedRunnerNotCalledAndAudited() async {
+        let h = makeClaudeHarness(enabled: false)   // default-OFF capability (I5)
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude do something"))
+
+        #expect(h.claudeRunner?.runCount == 0)      // I5: disabled → the agent never spawns
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("enable Claude in Settings") })
+        #expect(h.audit.entries.map(\.event).contains(.rejected(reason: "enable Claude in Settings")))
+    }
+
+    @Test func claudeWithNoActiveRepoIsRefusedAndDoesNotSpawn() async {
+        let h = makeClaudeHarness(enabled: true)    // enabled + armed, but no /cd
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude do something"))
+
+        #expect(h.claudeRunner?.runCount == 0)      // I5: no active repo → nothing spawns
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("select a repo first") })
+        #expect(h.audit.entries.map(\.event).contains(.rejected(reason: "select a repo first")))
+    }
+
+    @Test func claudeWhileDisarmedIsRefusedAndDoesNotSpawn() async {
+        let h = makeClaudeHarness(enabled: true)    // enabled, but never armed
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude do something"))
+
+        #expect(h.claudeRunner?.runCount == 0)      // I2/I5: disarmed → nothing spawns
+        #expect(h.transport.sentMessages.first?.text.lowercased().contains("disarm") == true)
+        #expect(h.audit.entries.map(\.event) == [.rejected(reason: "disarmed")])
+    }
+
+    @Test func claudeOversizedOutputSentAsDocument() async {
+        let big = String(repeating: "x", count: OutputFormatter.documentThreshold + 1)
+        let h = makeClaudeHarness(enabled: true, result: CommandResult(exitCode: 0, stdout: big, stderr: ""))
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/claude big task"))
+
+        #expect(h.transport.sentDocuments.count == 1)   // FR-6: oversized agent output → one document
+        #expect(h.transport.sentDocuments.first?.filename == "output.txt")
     }
 }

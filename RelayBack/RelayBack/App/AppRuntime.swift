@@ -79,6 +79,11 @@ final class AppRuntime {
         // launches. S17/S18 wire the git + build commands: each is repo-scoped, so it runs in the
         // active repo selected with `/cd` and refuses until one is chosen (§4a). `/build` additionally
         // draws its scheme/destination from that repo's config.
+        // S21: the `/claude` agent action — off by default (I5). Both the guard's capability gate and
+        // the command advertisement below key off the persisted toggle, so nothing agent-related is
+        // reachable until the operator enables it in Settings (S22).
+        let claudeEnabled = configStore.claudeEnabled()
+        let claudeProfile = configStore.claudeProfile()
         let authGuard = AuthGuard(allowlist: Set(configStore.allowlist()),
                                   totpSecret: secret,
                                   registry: .seed,
@@ -86,11 +91,14 @@ final class AppRuntime {
                                   idleTimeout: idleTimeout,
                                   parameterizedCommands: GitCommands.all + BuildCommands.all,
                                   repoConfigs: configStore.repos(),
-                                  simulatorCommand: SimulatorCommand.spec)
+                                  simulatorCommand: SimulatorCommand.spec,
+                                  claudeEnabled: claudeEnabled,
+                                  claudeProfile: claudeProfile)
 
         let sink = MenuBarAuditSink(base: FileAuditLog(fileURL: Self.auditLogURL()), menuBar: menuBar)
         let coordinator = AppCoordinator(authGuard: authGuard,
                                          runner: ProcessCommandRunner(),
+                                         claudeRunner: ProcessClaudeRunner(),
                                          transport: client,
                                          audit: sink,
                                          clock: clock)
@@ -118,7 +126,8 @@ final class AppRuntime {
         loop.start()
 
         // Best-effort: advertise the allowlisted commands so they autocomplete in chat (SPEC §5).
-        Task { try? await client.setMyCommands(Self.botCommands()) }
+        // `/claude` is advertised only while the capability is enabled (S21).
+        Task { try? await client.setMyCommands(Self.botCommands(claudeEnabled: claudeEnabled)) }
     }
 
     /// Stops long-polling — graceful shutdown (e.g. on app termination). Idempotent.
@@ -134,9 +143,10 @@ final class AppRuntime {
     // MARK: - Wiring helpers
 
     /// The autocompleted command list, derived from the action registry, the control commands, and
-    /// the parameterized git + build commands (S17/S18) plus the multi-step `/sim` (S19).
-    /// `dropFirst()` strips the leading slash Telegram adds.
-    private static func botCommands() -> [BotCommand] {
+    /// the parameterized git + build commands (S17/S18) plus the multi-step `/sim` (S19). The agent
+    /// action `/claude` (S21) is appended only when `claudeEnabled`, so a disabled capability is not
+    /// advertised (I5). `dropFirst()` strips the leading slash Telegram adds.
+    private static func botCommands(claudeEnabled: Bool) -> [BotCommand] {
         let actions = ActionRegistry.seed.actions.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
@@ -145,6 +155,9 @@ final class AppRuntime {
         }
         dev.append(BotCommand(command: String(SimulatorCommand.spec.command.dropFirst()),
                               description: SimulatorCommand.spec.description))
+        if claudeEnabled {
+            dev.append(BotCommand(command: "claude", description: "Run a Claude Code agent in the active repo"))
+        }
         let controls = [
             BotCommand(command: "arm", description: "Arm the session with a TOTP code"),
             BotCommand(command: "disarm", description: "Disarm the session"),

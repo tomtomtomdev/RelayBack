@@ -28,6 +28,12 @@ enum Decision: Equatable {
     /// the ordered step sequence, built entirely from the active repo's config (never operator text,
     /// I1); the coordinator runs the steps in order and stops on the first non-zero exit.
     case runActionSequence([Action])
+    /// Authorized sender, armed session, `/claude` enabled with an active repo (§4b / S21). Carries
+    /// the operator's free-text prompt (the ONE free-text parameter — a single inert token, I5), the
+    /// active-repo root (the run cwd that bounds Claude Code), and the configured profile. The
+    /// coordinator runs it via `ClaudeRunning`; the prompt is NOT validated — it is contained by the
+    /// profile + cwd, never by pretending to validate it (§4b).
+    case runClaude(prompt: String, repoRoot: String, profile: ClaudeProfile)
     /// Authorized sender, armed session, matched a parameterized command, but a parameter failed
     /// validation (§4a). Carries a short, secret-free reason; nothing is spawned.
     case invalidParameters(String)
@@ -86,6 +92,16 @@ struct AuthGuard {
     /// never leaks across sessions. Only meaningful while armed (see `currentRepo`).
     private var activeRepo: RepoConfig?
 
+    /// Whether the `/claude` agent action is enabled (§4b / S21 — invariant I5). **Defaults OFF**, so
+    /// every existing call site/test leaves it disabled and `/claude` refuses until the operator opts
+    /// in (S22). This is the capability half of the I5 gate (the arm gate + active-repo are the rest).
+    private let claudeEnabled: Bool
+
+    /// The Claude Code profile (executable, permission posture, timeout, model) carried in a
+    /// `.runClaude` decision for the coordinator's runner. The guard never spawns — it only gates and
+    /// packages the run. Fail-closed default (`restricted`, no executable) keeps I5 safe by default.
+    private let claudeProfile: ClaudeProfile
+
     init(allowlist: Set<Int64>,
          totpSecret: Data,
          registry: ActionRegistry,
@@ -93,7 +109,9 @@ struct AuthGuard {
          idleTimeout: TimeInterval,
          parameterizedCommands: [ParameterizedCommand] = [],
          repoConfigs: [RepoConfig] = [],
-         simulatorCommand: SimulatorCommandSpec? = nil) {
+         simulatorCommand: SimulatorCommandSpec? = nil,
+         claudeEnabled: Bool = false,
+         claudeProfile: ClaudeProfile = .default) {
         self.allowlist = allowlist
         self.totpSecret = totpSecret
         self.registry = registry
@@ -102,6 +120,8 @@ struct AuthGuard {
         self.parameterizedCommands = parameterizedCommands
         self.repoConfigs = repoConfigs
         self.simulatorCommand = simulatorCommand
+        self.claudeEnabled = claudeEnabled
+        self.claudeProfile = claudeProfile
     }
 
     /// Replaces the authorization allowlist at runtime (S12 — hot-reload from Settings). Arm state
@@ -172,6 +192,8 @@ struct AuthGuard {
         case "/repos":
             guard isArmed else { return .disarmed }
             return .control(.repoList(repoConfigs))
+        case "/claude":
+            return resolveClaude(text)
         default:
             if let action = registry.match(text) {
                 guard isArmed else { return .disarmed }    // I2: actions run only while armed
@@ -251,6 +273,25 @@ struct AuthGuard {
         case let .invalid(reason):
             return .invalidParameters(reason)            // §4a: a repo missing config spawns nothing
         }
+    }
+
+    /// Resolves the `/claude` agent action (§4b / S21). Gate order mirrors the other repo-scoped
+    /// commands: arm state first (I2 — a disarmed operator is told to arm, not shown capability/repo
+    /// state), then the capability toggle (I5 — OFF by default), then the active-repo precondition
+    /// (the cwd that bounds Claude Code's file reach), then a non-empty prompt. The prompt is NOT
+    /// validated — it is the one free-text parameter, contained by the profile + cwd, and is carried
+    /// verbatim as a single inert token (I5): `operatorArguments` returns everything after `/claude`
+    /// as ONE value, so shell metacharacters/leading dashes are never split off or read as flags.
+    /// Nothing is built on refusal.
+    private mutating func resolveClaude(_ text: String) -> Decision {
+        guard isArmed else { return .disarmed }                                   // I2 before anything
+        guard claudeEnabled else { return .invalidParameters("enable Claude in Settings") }
+        guard let repo = currentRepo else { return .invalidParameters("select a repo first") }
+        guard let prompt = operatorArguments(in: text).first else {
+            return .invalidParameters("usage: /claude <prompt>")
+        }
+        extendArmedWindow()                                                       // an agent turn resets idle
+        return .runClaude(prompt: prompt, repoRoot: repo.root, profile: claudeProfile)
     }
 
     /// The operator-supplied argument for a parameterized command: everything after the command

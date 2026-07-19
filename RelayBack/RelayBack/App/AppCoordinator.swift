@@ -30,6 +30,7 @@ import Foundation
 final class AppCoordinator {
     private var authGuard: AuthGuard
     private let runner: CommandRunning
+    private let claudeRunner: ClaudeRunning
     private let transport: TelegramTransport
     private let audit: AuditSink
     private let clock: Clock
@@ -40,11 +41,13 @@ final class AppCoordinator {
 
     init(authGuard: AuthGuard,
          runner: CommandRunning,
+         claudeRunner: ClaudeRunning = ProcessClaudeRunner(),
          transport: TelegramTransport,
          audit: AuditSink,
          clock: Clock) {
         self.authGuard = authGuard
         self.runner = runner
+        self.claudeRunner = claudeRunner
         self.transport = transport
         self.audit = audit
         self.clock = clock
@@ -114,6 +117,12 @@ final class AppCoordinator {
             // §4a / S19: a multi-step command (`/sim`) — run each config-built step in order,
             // stopping at the first failure. Same per-step reply/audit contract as a single run.
             await runSequence(actions, fromId: fromId, chatId: chatId)
+
+        case let .runClaude(prompt, repoRoot, profile):
+            // §4b / S21: the agent action — the ONLY path that reaches the agent runner (I5). The
+            // guard already enforced armed AND claudeEnabled AND active repo; here we just spawn.
+            await runClaude(prompt: prompt, repoRoot: repoRoot, profile: profile,
+                            fromId: fromId, chatId: chatId)
         }
     }
 
@@ -166,14 +175,33 @@ final class AppCoordinator {
     /// caller (the `/sim` sequence) can decide whether to continue. The only place a process runs (I2).
     private func runStep(_ action: Action, fromId: Int64, chatId: Int64) async -> CommandResult {
         let result = await runner.run(action)          // I1: fixed Action from the guard, no operator text
+        await deliver(result, command: action.command, fromId: fromId, chatId: chatId)
+        return result
+    }
+
+    // MARK: - Running the agent action (§4b / S21 — the only path that reaches ClaudeRunning — I5)
+
+    /// Runs the `/claude` agent action: spawn Claude Code headless via `ClaudeRunning`, then deliver
+    /// and audit its result exactly like a fixed action. The prompt is a single inert argv token
+    /// (bound to `-p` in `ClaudeInvocation`, never a shell — I5/I1); the run is bounded by the
+    /// active-repo cwd + the profile's permission posture.
+    private func runClaude(prompt: String, repoRoot: String, profile: ClaudeProfile,
+                           fromId: Int64, chatId: Int64) async {
+        let result = await claudeRunner.run(prompt: prompt, repoRoot: repoRoot, profile: profile)
+        await deliver(result, command: "/claude", fromId: fromId, chatId: chatId)
+    }
+
+    /// The shared delivery tail for every run — fixed action, `/sim` step, or `/claude` agent turn:
+    /// format the output to chat, audit the run, and feed the popover's last-result card. Auditing is
+    /// centralized here so the I3 guarantee holds in ONE place: only the command token + exit code are
+    /// recorded — never the captured output, and never (for `/claude`) the operator's prompt (I3/I5).
+    /// The last-result card is local UI only (not the audit log / Telegram), so it too carries no secret.
+    private func deliver(_ result: CommandResult, command: String, fromId: Int64, chatId: Int64) async {
         for outgoing in OutputFormatter.format(result) {
             await send(outgoing, to: chatId)
         }
-        // I3: only the command token + exit code are recorded — never the captured output.
-        record(fromId: fromId, event: .actionRan(command: action.command, exitCode: result.exitCode))
-        // S13b: feed the popover's last-result card (local UI only — not the audit log / Telegram).
-        onActionCompleted?(action.command, result)
-        return result
+        record(fromId: fromId, event: .actionRan(command: command, exitCode: result.exitCode))
+        onActionCompleted?(command, result)
     }
 
     // MARK: - Transport & audit helpers

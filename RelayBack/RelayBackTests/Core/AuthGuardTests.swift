@@ -55,17 +55,91 @@ struct AuthGuardTests {
         #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
     }
 
-    // MARK: - Agent action not wired yet (S20 — proven inert until S21)
+    // MARK: - Agent action `/claude` gating (S21 — §4b / I5)
 
-    @Test func claudeCommandIsNotMatchableUntilWired() {
-        // S20 lands the mechanism (ClaudeInvocation / ClaudeRunning / config) but wires no command.
-        // Even armed + authorized, `/claude …` routes nowhere — no spec, no runner in the guard yet.
+    /// A ready-to-run Claude profile for the enabled-path tests (executable is irrelevant to the
+    /// guard — it never spawns; the coordinator's runner does).
+    private var claudeProfile: ClaudeProfile {
+        ClaudeProfile(executablePath: "/usr/local/bin/claude", permission: .restricted, timeout: 600)
+    }
+
+    private func makeGuard(_ clock: RelayBack.Clock,
+                           claudeEnabled: Bool,
+                           claudeProfile: ClaudeProfile,
+                           repoConfigs: [RepoConfig]) -> AuthGuard {
+        AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                  clock: clock, idleTimeout: idleTimeout,
+                  repoConfigs: repoConfigs,
+                  claudeEnabled: claudeEnabled, claudeProfile: claudeProfile)
+    }
+
+    @Test func claudeIsRefusedWhenDisabled() {
+        // Default-OFF (I5): even armed + authorized with an active repo, `/claude` refuses until the
+        // operator enables it in Settings. It is not silently unknown — the operator is told how.
         let clock = TestClock(start)
-        var guardState = makeGuard(clock)
-        #expect(guardState.authorize(fromId: allowed,
-                                     text: "/arm \(goodCode(at: clock.now))") == .control(.armAccepted))
-        #expect(guardState.authorize(fromId: allowed,
-                                     text: "/claude summarize the diff") == .unknownCommand)
+        var guardState = makeGuard(clock, claudeEnabled: false, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        #expect(guardState.authorize(fromId: allowed, text: "/claude summarize the diff")
+                == .invalidParameters("enable Claude in Settings"))
+    }
+
+    @Test func claudeRequiresAnArmedSession() {
+        // I2 first: a disarmed operator is told to arm, never shown the capability/repo state.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        #expect(guardState.authorize(fromId: allowed, text: "/claude anything") == .disarmed)
+    }
+
+    @Test func claudeRequiresAnActiveRepo() {
+        // Enabled + armed, but no `/cd` yet → the active-repo precondition (the cwd that bounds
+        // Claude Code) fails, nothing is built.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/claude summarize the diff")
+                == .invalidParameters("select a repo first"))
+    }
+
+    @Test func claudeRejectsAnEmptyPrompt() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        #expect(guardState.authorize(fromId: allowed, text: "/claude")
+                == .invalidParameters("usage: /claude <prompt>"))
+        #expect(guardState.authorize(fromId: allowed, text: "/claude    ")
+                == .invalidParameters("usage: /claude <prompt>"))
+    }
+
+    @Test func claudeEnabledArmedWithRepoResolvesToRunClaude() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        // The decision carries the prompt, the active-repo root (the run cwd), and the profile.
+        #expect(guardState.authorize(fromId: allowed, text: "/claude summarize the diff")
+                == .runClaude(prompt: "summarize the diff",
+                              repoRoot: relayback.root, profile: claudeProfile))
+    }
+
+    @Test func claudeCarriesAHostilePromptAsASingleInertToken() {
+        // I5 at the guard: a prompt full of shell metacharacters is carried WHOLE as the single free-
+        // text value — the guard never splits it into args or reads any part as a flag. Binding it to
+        // `-p` (and keeping it inert at spawn) is proven by ClaudeInvocationTests / ClaudeRunnerTests.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, claudeEnabled: true, claudeProfile: claudeProfile,
+                                   repoConfigs: [relayback])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")
+        let hostile = "$HOME && echo pwned; rm -rf / --no-preserve-root"
+        #expect(guardState.authorize(fromId: allowed, text: "/claude \(hostile)")
+                == .runClaude(prompt: hostile, repoRoot: relayback.root, profile: claudeProfile))
     }
 
     // MARK: - Arming

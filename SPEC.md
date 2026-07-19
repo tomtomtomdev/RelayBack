@@ -160,9 +160,14 @@ safety boundary.
   the executable slot, a permission flag, or any other argv position.
 - **Execution hygiene reused.** Normal user (never root), restricted PATH, single-action
   concurrency, a dedicated (longer) timeout that kills the run. I4 unchanged.
-- **Audit.** One line: timestamp, `from.id`, `claude` + repo name + profile, exit code. No prompt
-  body, no output, no secrets. (The prompt is already visible to Telegram per §4; the audit stays
-  secret-free like every other entry.)
+- **Audit.** One line, uniform with every other repo-scoped command: timestamp, `from.id`,
+  `action=/claude`, exit code — **no prompt body, no output, no secrets** (the prompt is already
+  visible to Telegram per §4; the audit stays secret-free like every other entry). The active repo is
+  recoverable from the immediately-preceding, always-audited `/cd <name>` line, so it is not duplicated
+  here. *(S21 records token + exit only, matching `/build`/`/sim`/git. Surfacing the permission profile
+  in the audit line — the one fact not recoverable elsewhere, and the most security-relevant for the
+  agent action — is a deliberate future refinement, deferred so S21 does not expand the `AuditEvent`
+  taxonomy; it lands naturally once the profile is a first-class operator-configured value, S22+.)*
 
 **New invariant — I5** (also in §4's invariant list): `/claude` runs only if `claudeEnabled`
 **AND** armed **AND** an active repo is selected. It is spawned non-interactively, cwd = that

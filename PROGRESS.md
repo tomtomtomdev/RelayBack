@@ -5,6 +5,45 @@
 
 ## Current state
 
+- **S21 done — `/claude` command wiring. The agent action is now routable (gated OFF by default).**
+  `/claude <prompt>` flows end-to-end through the guard + coordinator, spawning headless Claude Code in
+  the active repo. It is inert in production until S22 adds the Settings toggle (`claudeEnabled` reads
+  `false` with no UI to flip it), but the whole run path is wired and invariant-tested. New pieces:
+  - **`Decision.runClaude(prompt:repoRoot:profile:)`** — a fully-resolved agent-run description (the
+    §4b analog of `.runAction`). Carries the operator's free-text prompt (the one free-text parameter,
+    a single inert token — I5), the active-repo root (the run cwd that bounds Claude Code), and the
+    configured `ClaudeProfile`. The coordinator runs it; the prompt is **never validated** — it is
+    contained by the profile + cwd, not a validator (§4b).
+  - **`AuthGuard` gained `claudeEnabled: Bool = false` + `claudeProfile: ClaudeProfile = .default`**
+    (both defaulted so every existing init/test call site compiles unchanged, and OFF by default — I5).
+    `/claude` is a hardcoded token case (like `/cd`), routed to a new `resolveClaude` whose gate order
+    mirrors the other repo-scoped commands: **arm (I2) → `claudeEnabled` (I5) → active-repo → non-empty
+    prompt**, else `.invalidParameters(reason)` (`enable Claude in Settings` / `select a repo
+    first` / `usage: /claude <prompt>`). The prompt is extracted with the existing
+    `operatorArguments(in:)` — everything after `/claude` as ONE value — so metachars/leading dashes
+    are never split off or read as a flag.
+  - **`AppCoordinator` gained an injected `claudeRunner: ClaudeRunning = ProcessClaudeRunner()`** (the
+    default keeps existing call sites unchanged; tests inject `FakeClaudeRunner`). New `runClaude` spawns
+    via `ClaudeRunning` (cwd = active repo) and — via the **new shared `deliver(_:command:fromId:chatId:)`**
+    — formats the output (reuse S4), delivers it, and audits it. The audit line is
+    `actionRan(command: "/claude", exitCode:)` — token + exit only, **never the prompt or output** (I3/I5).
+    The refactor extracted `deliver` out of `runStep` so both the fixed-action/`/sim` path and the agent
+    path centralize the I3 contract in one place (behavior-preserving — the `/sim` tests stayed green).
+  - **`AppRuntime` wiring** — `start()` reads `configStore.claudeEnabled()`/`claudeProfile()`, seeds the
+    guard, injects `ProcessClaudeRunner()`, and advertises `/claude` via `setMyCommands` **only while
+    enabled** (`botCommands(claudeEnabled:)`). I1/I4 unchanged — `ProcessClaudeRunner` reuses the same
+    audited `ProcessSpawner` execve path as every other command.
+  - **Not yet done (S22):** no Settings UI flips `claudeEnabled`, so in production `/claude` currently
+    always replies `⚠️ enable Claude in Settings`. The **manual smoke against the real Claude Code
+    CLI** (confirm no-hang on non-allowlisted tools + exact flag spellings — see the S20 ⚠️ note) is
+    still a prerequisite before enabling for real.
+- ✅ **S21 verified green on macOS** (this session): full `RelayBackTests` = **319 tests / 38 suites**
+  passing (added `AuthGuardTests` (+5) — disabled→refused, requires-armed (I2 first), requires-active-repo,
+  empty-prompt rejected, valid→`.runClaude`, and a hostile-prompt-stays-one-token I5 assertion; replaced
+  the S20 "not matchable" test since S21 *is* the wiring; `AppCoordinatorTests` (+5) — enabled+armed+repo
+  runs via the fake agent runner (asserts prompt/repoRoot/profile + FR-6 output + secret-free audit),
+  disabled→runner-not-called+audited (I5), no-repo→refused+no-spawn, disarmed→refused+no-spawn (I2/I5),
+  oversized agent output→document). App builds clean, no warnings.
 - **S20 done — Claude agent foundation (mechanism only; `/claude` not yet routable).** The first slice
   of the agent-action epic (SPEC §4b) landed test-first. New pieces:
   - **Pure `Core/ClaudeInvocation`** — `build(prompt:repoRoot:profile:) -> ClaudeInvocation?` turns a
@@ -467,12 +506,17 @@
   code only, never output). Also pins FR-6 reply shaping (normal → text, oversized → one document)
   and FR-2 (strangers get no reply, only an audit line). The `Decision`+`ControlResult`+
   `CommandResult` → `AuditEvent` mapping deferred from S9 is now defined here (see decisions).
-- **Next slice:** **S21 — `/claude` command wiring** (agent-action epic). Route `/claude <prompt>`
-  through the guard (gate: armed **AND** `claudeEnabled` **AND** active repo, else `.invalidParameters`)
-  and `AppCoordinator` (run via `ClaudeRunning` with cwd = active repo, format via S4, secret-free audit
-  line), and advertise `/claude` via `setMyCommands` only while enabled. The S20 mechanism
-  (`ClaudeInvocation`/`ClaudeRunning`/`FakeClaudeRunner`/config) is ready; S22 is the Settings pane.
-  All v1 slices S0–S19 remain complete; besides the epic, the optional follow-ups still stand (none
+- **Next slice:** **S22 — Settings: Claude capability pane** (agent-action epic, final wiring slice). A
+  **Claude** pane/section: the `claudeEnabled` toggle (default OFF), a permission-profile picker
+  (`restricted` / `editsInRepo` / `fullBypass` — the last with a red warning subtitle), `executablePath`
+  (reuse the post-S19 `FolderPicking` seam), and the agent timeout, all `@Observable` + persisted through
+  `ConfigStore`. **Decision to make first (record it):** does toggling at runtime hot-reload the guard +
+  re-advertise commands (S12 allowlist pattern), or apply on next arm/restart? PLAN recommends hot-reload
+  for parity — but note S21 wired NO `updateClaudeConfig` on the guard yet (guard reads config once at
+  `AppRuntime.start()`), so hot-reload means adding that method + a coordinator passthrough (like
+  `updateRepos`). **Before enabling for real:** run the manual Claude Code CLI smoke (no-hang + exact
+  flags, per the S20 ⚠️ note). The S20/S21 machinery (`ClaudeInvocation`/`ClaudeRunning`/guard gate/
+  coordinator/advertisement) is all ready. All v1 slices S0–S19 remain complete; besides the epic, the optional follow-ups still stand (none
   blocking v1): (a) `/sim` `simctl install`/`launch` of the built app
   — needs a bundle-id + built-product-path added to `RepoConfig` + Settings (deferred this session,
   SPEC §4a note); (b) per-second live menu-bar countdown (status refreshes on audit events, not a
@@ -519,7 +563,7 @@
 | S18  | xcodebuild (`/build`) | ✅ done |
 | S19  | Simulator run (`/sim`) | ✅ done |
 | S20  | Claude agent foundation *(agent-action epic)* | ✅ done |
-| S21  | `/claude` command wiring | ☐ not started |
+| S21  | `/claude` command wiring | ✅ done |
 | S22  | Settings: Claude capability pane | ☐ not started |
 | S23  | *(deferred)* persistent session + streaming + `/kill` | ☐ deferred |
 
@@ -527,14 +571,51 @@ Legend: ☐ not started · ◐ in progress · ✅ done (green + refactored)
 
 _The **S13** design-conformance epic (S13a–S13f) and the **S15–S19** dev-workflow epic (parameterized
 actions) are both complete — **all v1 slices (S0–S19) are done and implemented.** The **agent-action
-epic (S20–S22, + deferred S23)** is now **in progress**: **S20 (foundation) is done**; **S21**
-(`/claude` wiring) is next, then **S22** (Settings pane). Other remaining items are optional follow-ups
+epic (S20–S22, + deferred S23)** is now **in progress**: **S20 (foundation) + S21 (`/claude` wiring)
+are done**; **S22** (Settings capability pane) is next. Other remaining items are optional follow-ups
 (see "Next" below)._
 
 ## Decisions & deviations
 
 _(Record anything that differs from or sharpens SPEC.md / PLAN.md, with a one-line why.)_
 
+- 2026-07-19 — S21: **`/claude` is a hardcoded token case; a *disabled* `/claude` returns
+  `.invalidParameters("enable Claude in Settings")`, NOT `.unknownCommand`.** Because the operator
+  is already allowlisted + armed to reach the resolver, telling them how to enable the capability leaks
+  nothing (no disclosure concern) and is far more useful than pretending the command doesn't exist. This
+  matches PLAN S21's "enable-in-Settings" message. It changes the S20 `claudeCommandIsNotMatchableUntilWired`
+  test premise (S21 *is* the wiring), so that test was replaced by `claudeIsRefusedWhenDisabled`.
+- 2026-07-19 — S21: **Gate order in `resolveClaude` is arm (I2) → `claudeEnabled` (I5) → active-repo →
+  non-empty prompt**, mirroring `resolveParameterized`/`resolveSimulator`. Arm first so a disarmed
+  operator is told to arm (never shown capability/repo state); then the capability toggle; then the
+  active-repo precondition (the cwd that bounds Claude Code); then the prompt. Any failure →
+  `.invalidParameters(reason)`, nothing built. The prompt is extracted via the existing
+  `operatorArguments(in:)` (everything after `/claude` as ONE trimmed value) so shell metacharacters /
+  leading dashes stay inside the single free-text token — the guard-level half of I5 (argv-binding is
+  `ClaudeInvocation`, spawn-inertness is `ProcessClaudeRunner`, both S20-tested).
+- 2026-07-19 — S21: **`AppCoordinator` gained `claudeRunner: ClaudeRunning = ProcessClaudeRunner()`
+  (defaulted), and `runStep`/`runClaude` now share a new `deliver(_:command:fromId:chatId:)`.** The
+  default keeps every existing `AppCoordinator(...)` call site compiling (established default-param
+  pattern); tests inject `FakeClaudeRunner`. `deliver` centralizes the format→send→audit→last-result
+  tail so the I3 "token + exit only" audit contract lives in ONE place for the fixed-action, `/sim`, and
+  `/claude` paths alike — behavior-preserving (the S19 `/sim` tests stayed green). The `/claude` audit
+  token is the literal `"/claude"`, never the prompt (I3/I5).
+- 2026-07-19 — S21: **Guard reads Claude config once at `AppRuntime.start()`; NO `updateClaudeConfig`
+  hot-reload yet — deferred to S22.** `claudeEnabled`/`claudeProfile` are injected into the guard init
+  (and gate the `setMyCommands` advertisement) at start; there is no Settings UI to flip `claudeEnabled`
+  until S22, so `/claude` is inert (always refused) in production today. Whether toggling hot-reloads the
+  live guard vs. applies on next arm/restart is the explicit S22 decision (PLAN recommends hot-reload for
+  parity with the allowlist/repos — that would add a guard `mutating func updateClaudeConfig` + a
+  coordinator passthrough).
+- 2026-07-19 — S21: **`/claude` audits as `action=/claude exit=N`, uniform with every repo-scoped
+  command — NOT the richer "repo name + profile" SPEC §4b originally wrote.** Enriching would mean a
+  bespoke `AuditEvent` case rippling through `AuditEntry.detail`/`.parse`, `AuditRowPresentation`
+  (the S13f pane), and the `Decision` shape — a taxonomy expansion beyond PLAN S21's "secret-free audit
+  line." The active repo is already recoverable from the immediately-preceding, always-audited
+  `/cd <name>` line, so only the permission *profile* is genuinely non-redundant; surfacing it is
+  deferred (SPEC §4b trued-up to record this) to land once the profile is a first-class operator-
+  configured value (S22+). I3/I5 hold either way — the token+exit event structurally can't carry the
+  prompt or output.
 - 2026-07-19 — S20: **`ClaudeInvocation.build` returns a value struct — a superset of SPEC §7's
   `(executable, argv)`.** It also carries `workingDirectory` (= repoRoot, the cwd that bounds Claude
   Code's file reach) and `timeout`, which the runner needs. The prompt is bound to `-p` and placed
