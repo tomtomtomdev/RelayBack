@@ -76,9 +76,10 @@ final class AppRuntime {
 
         let clock = SystemClock()
         // Seed the guard from the persisted allowlist + repos (S12/S16) — the source of truth across
-        // launches. S17/S18 wire the git + build commands: each is repo-scoped, so it runs in the
-        // active repo selected with `/cd` and refuses until one is chosen (§4a). `/build` additionally
-        // draws its scheme/destination from that repo's config.
+        // launches. S17 wires the git commands: each is repo-scoped, so it runs in the active repo
+        // selected with `/cd` and refuses until one is chosen (§4a). The `/build` (S18) and `/sim`
+        // (S19) commands were unwired here — their specs remain but are no longer injected or
+        // advertised, so neither is matchable in production.
         // S21: the `/claude` agent action — off by default (I5). Both the guard's capability gate and
         // the command advertisement below key off the persisted toggle, so nothing agent-related is
         // reachable until the operator enables it in Settings (S22).
@@ -89,9 +90,8 @@ final class AppRuntime {
                                   registry: .seed,
                                   clock: clock,
                                   idleTimeout: idleTimeout,
-                                  parameterizedCommands: GitCommands.all + BuildCommands.all,
+                                  parameterizedCommands: GitCommands.all,
                                   repoConfigs: configStore.repos(),
-                                  simulatorCommand: SimulatorCommand.spec,
                                   claudeEnabled: claudeEnabled,
                                   claudeProfile: claudeProfile)
 
@@ -152,18 +152,16 @@ final class AppRuntime {
     // MARK: - Wiring helpers
 
     /// The autocompleted command list, derived from the action registry, the control commands, and
-    /// the parameterized git + build commands (S17/S18) plus the multi-step `/sim` (S19). The agent
-    /// action `/claude` (S21) is appended only when `claudeEnabled`, so a disabled capability is not
-    /// advertised (I5). `dropFirst()` strips the leading slash Telegram adds.
+    /// the parameterized git commands (S17). `/build` (S18) and `/sim` (S19) were unwired, so they are
+    /// no longer advertised. The agent action `/claude` (S21) is appended only when `claudeEnabled`,
+    /// so a disabled capability is not advertised (I5). `dropFirst()` strips the slash Telegram adds.
     private static func botCommands(claudeEnabled: Bool) -> [BotCommand] {
         let actions = ActionRegistry.seed.actions.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
-        var dev = (GitCommands.all + BuildCommands.all).map {
+        var dev = GitCommands.all.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
         }
-        dev.append(BotCommand(command: String(SimulatorCommand.spec.command.dropFirst()),
-                              description: SimulatorCommand.spec.description))
         if claudeEnabled {
             dev.append(BotCommand(command: "claude", description: "Run a Claude Code agent in the active repo"))
         }

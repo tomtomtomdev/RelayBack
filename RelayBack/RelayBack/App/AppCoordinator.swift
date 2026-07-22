@@ -147,7 +147,7 @@ final class AppCoordinator {
             // S20: `/arm` was sent without a code (e.g. tapped from the command menu). Prompt the
             // operator to type it — `force_reply` opens the keyboard so the next message is the code.
             // I3: the prompt is a fixed string, it carries no secret.
-            await reply(chatId, "🔐 Enter your TOTP code to arm:", forceReply: true)
+            await reply(chatId, "🔐 Enter your TOTP code to arm:", markup: .forceReply)
             record(fromId: fromId, event: .control("arm prompt"))
         case .disarmAccepted:
             await reply(chatId, "🔒 Disarmed.")
@@ -164,6 +164,13 @@ final class AppCoordinator {
         case let .repoList(repos):
             await reply(chatId, RepoListPresentation.list(repos))
             record(fromId: fromId, event: .control("repos"))
+        case let .cdPrompt(repos):
+            // S25: `/cd` with no name — offer the configured repos as a one-time tap keyboard so
+            // the operator picks instead of typing. The button labels are names only (I3), and the
+            // guard consumes the next message as the choice. No secret in the prompt or audit line.
+            await reply(chatId, RepoListPresentation.selectPrompt,
+                        markup: .keyboard(RepoListPresentation.pickerButtons(repos)))
+            record(fromId: fromId, event: .control("cd prompt"))
         }
     }
 
@@ -228,9 +235,9 @@ final class AppCoordinator {
         }
     }
 
-    private func reply(_ chatId: Int64, _ text: String, forceReply: Bool = false) async {
+    private func reply(_ chatId: Int64, _ text: String, markup: ReplyMarkup = .none) async {
         // Best-effort: a failed send must not crash update handling (the loop keeps polling).
-        try? await transport.sendMessage(chatId: chatId, text: text, forceReply: forceReply)
+        try? await transport.sendMessage(chatId: chatId, text: text, markup: markup)
     }
 
     private func record(fromId: Int64, event: AuditEvent) {

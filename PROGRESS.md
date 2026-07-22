@@ -5,6 +5,72 @@
 
 ## Current state
 
+- **S25 done — `/cd` offers a tappable repo picker instead of failing on a missing name.** Sending
+  a bare `/cd` (e.g. tapping it from the command menu) used to reply `⚠️ usage: /cd <repo>`; it now
+  offers the configured repos as a **one-time Telegram tap keyboard** (button per repo), and the
+  operator's next message — the tapped name — is consumed as the pick. Mirrors the S24 `/arm`
+  prompt. New pieces:
+  - **Transport reply-markup generalized (preparatory refactor).** The S24 `forceReply: Bool`
+    parameter on `TelegramTransport.sendMessage` became a **`ReplyMarkup` enum**
+    (`.none`/`.forceReply`/`.keyboard([String])`) — the Bot API's `reply_markup` modelled as a
+    closed set. Convenience overloads (`sendMessage(chatId:text:)` and the old
+    `…forceReply:`) forward to it, so no call site outside the coordinator changed.
+    `TelegramClient` builds the wire markup per case (force_reply, or a one-time custom keyboard
+    with `resize_keyboard`/`one_time_keyboard`). Behavior-preserving — app `build` stayed green.
+  - **`ControlResult.cdPrompt([RepoConfig])`** + `AuthGuard` state `awaitingRepoName`. `handleCd`:
+    with a name → the existing exact-match select (extracted to `selectRepo(named:)`, shared);
+    with **no** name and repos configured → set `awaitingRepoName`, return `.cdPrompt(repoConfigs)`;
+    with no name and **no repos** → `.invalidParameters("no repos configured")`. In `authorize`,
+    while `awaitingRepoName` the next **non-command** message is routed to `selectRepo` (guarded on
+    `isArmed`); a `/`-command cancels the picker. The flag clears on consume, on a new command, and
+    in `disarm()`. **I2 preserved:** a bare word selects a repo only *right after* the picker — an
+    idle word is `.unknownCommand`, never a silent repo switch (mirrors S24's bare-code guard).
+    Arm gate stays first, so a disarmed operator is told to arm and never shown the repo names.
+  - **Pure `RepoListPresentation.selectPrompt` + `pickerButtons(_:)`** — button labels are repo
+    **names only** (discloses even less than `/repos`, which shows name + root; I3 asserted).
+    `AppCoordinator` maps `.cdPrompt` → the keyboard reply + a secret-free `.control("cd prompt")`
+    audit line.
+  - **SPEC §5** grammar for `/cd` updated (picker on bare `/cd`, names-only buttons, cancel-on-command).
+  - ⚠️ **Verification — compile-verified only; full suite NOT observed green this session.** App
+    `build` and `build-for-testing` both succeeded (**BUILD SUCCEEDED**). The `test` suite could not
+    be run to completion: **five** attempts died on the documented LSUIElement menu-bar test-host
+    flake ("test runner hung before establishing connection" / one run executed 0 tests), the same
+    blocker the concurrent `/build`+`/sim` unwire below hit — aggravated by the two sessions competing
+    for the same `RelayBack` app-host/process namespace. **+10 tests added** (7 `AuthGuardTests`:
+    bare-`/cd` picker, name-after-picker selects, unknown-name-after-picker rejected, command cancels
+    picker, bare-name-without-picker unknown, disarmed-doesn't-offer, no-repos-configured,
+    disarm-clears-picker; 2 `AppCoordinatorTests`: bare-`/cd` sends the keyboard + audits "cd prompt",
+    tap-selects end-to-end; 1 `RepoListPresentationTests`: buttons are names-only). Expected **308
+    tests / 36 suites** (was 298/36 at S24; no suites added). **Next session: re-run the full suite
+    once the test host is reachable again** and confirm the count.
+- **Change (post-S24) — `/build` and `/sim` unwired from production (reversible unwire, not deletion).**
+  The two repo-scoped dev commands are no longer offered: `/build` (S18 — "Build the active repo's
+  scheme") and `/sim` (S19 — "Build, boot & reveal the active repo's simulator"). Only `AppRuntime`
+  changed:
+  - `start()` now injects `parameterizedCommands: GitCommands.all` (was `+ BuildCommands.all`) and no
+    longer passes `simulatorCommand:` — it defaults to `nil`, so `/sim` is not matchable. `botCommands()`
+    drops both from the advertised `setMyCommands` list.
+  - **Kept intact but inert:** `Core/BuildCommands.swift`, `Core/SimulatorCommand.swift`, and the whole
+    `/sim` mechanism in `AuthGuard`/`AppCoordinator` (`resolveSimulator`, `Decision.runActionSequence`,
+    `AppCoordinator.runSequence`) plus the `/build` `configArgs`/`RepoConfigArg` plumbing. Their unit
+    tests (`BuildCommandsTests`, `SimulatorCommandTests`) still pass and are unchanged, so re-adding
+    either command is a one-line wiring change. This matches the S15/S20 "mechanism present, inert in
+    production" pattern (user chose reversible unwire over full deletion).
+  - **No security-surface change:** removing commands only narrows the runnable surface. I1/I4 are
+    properties of the runner + match mechanism, both untouched. `AuthGuard`'s now-stale
+    "Production injects `SimulatorCommand.spec`" doc comment was deliberately left as-is (core untouched
+    by request); the accurate current state is recorded in `AppRuntime`'s comments.
+  - ⚠️ **Verification — compile-verified green; full suite NOT observed green this session.** The change
+    built `** TEST BUILD SUCCEEDED **` (app + all test targets) in an isolated clean-`HEAD` git worktree
+    with only this patch applied. `AppRuntime` is untested wiring glue (no `AppRuntimeTests`), so a green
+    build is the correct bar for this layer (CLAUDE.md thin-real-impl rule) and no test outcome depends on
+    it. The `test-without-building` suite could not be run to completion: **three** attempts died on the
+    documented LSUIElement menu-bar test-host flake ("Test crashed with signal kill before establishing
+    connection"), aggravated by a **concurrent session** — its in-progress S24 `forceReply:`→`markup:`
+    refactor left the main working tree non-compiling and competing for the same `RelayBack`
+    app-host/process namespace, so cross-session `pkill`s kept killing the bootstrapping test host. **Next
+    session: re-run the full suite once the concurrent S24 work lands and the tree compiles again** — the
+    expected result is unchanged from HEAD (this change removes no tests).
 - **S24 done — `/arm` prompts for the TOTP code instead of failing on an empty code.** Tapping
   `/arm` from the Telegram command menu sends a bare `/arm` (no code), which previously replied
   "❌ Invalid code". Now a code-less `/arm` **prompts** the operator to type the code, and their

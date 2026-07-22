@@ -52,4 +52,18 @@ struct RepoListPresentationTests {
         #expect(!text.contains("DEST_SENTINEL"))
         #expect(!text.contains("SIM_SENTINEL"))
     }
+
+    // S25: the /cd picker button labels are the repo NAMES only — one per repo, in order — and
+    // disclose neither the root nor any build-config field (even less than /repos shows).
+    @Test func pickerButtonsAreRepoNamesInOrderOnly() {
+        let buttons = RepoListPresentation.pickerButtons([
+            full,
+            RepoConfig(name: "notes", root: "/Users/op/dev/Notes"),
+        ])
+        #expect(buttons == ["relayback", "notes"])
+        #expect(!buttons.contains { $0.contains("/Users/op/dev/RelayBack") })   // no root leaked
+        #expect(!buttons.contains { $0.contains("SCHEME_SENTINEL") })
+        #expect(!buttons.contains { $0.contains("DEST_SENTINEL") })
+        #expect(!buttons.contains { $0.contains("SIM_SENTINEL") })
+    }
 }

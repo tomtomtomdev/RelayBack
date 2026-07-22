@@ -152,7 +152,7 @@ struct AppCoordinatorTests {
         #expect(h.runner.runCount == 0)                          // nothing spawned by a prompt
         #expect(h.transport.sentMessages.count == 1)
         let prompt = h.transport.sentMessages.first
-        #expect(prompt?.forceReply == true)                      // opens the keyboard to type the code
+        #expect(prompt?.markup == .forceReply)                   // opens the keyboard to type the code
         #expect(prompt?.text.contains("code") == true)
         #expect(h.coordinator.isArmed == false)                  // still disarmed until a code arrives
         #expect(h.audit.entries.map(\.event) == [.control("arm prompt")])
@@ -330,18 +330,21 @@ struct AppCoordinatorTests {
 
     private let relayback = RepoConfig(name: "relayback", root: "/Users/op/dev/RelayBack",
                                        scheme: "RelayBack", destination: "platform=macOS")
+    private let notes = RepoConfig(name: "notes", root: "/Users/op/dev/Notes")
     private let gitStatusSpec = ParameterizedCommand(
         command: "/gitstatus", description: "Working tree status", executable: "/usr/bin/git",
         fixedArgs: ["status"], parameters: [], timeout: 20, requiresActiveRepo: true)
 
-    private func makeRepoHarness() -> Harness {
+    /// `repos` defaults to the single `relayback` fixture (a `nil` sentinel keeps the default out of
+    /// the signature, since an instance property can't be a default argument value).
+    private func makeRepoHarness(repos: [RepoConfig]? = nil) -> Harness {
         let clock = TestClock(start)
         let transport = FakeTelegramTransport()
         let runner = FakeCommandRunner()
         let audit = InMemoryAuditSink()
         let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
                                   clock: clock, idleTimeout: idleTimeout,
-                                  parameterizedCommands: [gitStatusSpec], repoConfigs: [relayback])
+                                  parameterizedCommands: [gitStatusSpec], repoConfigs: repos ?? [relayback])
         let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
                                          transport: transport, audit: audit, clock: clock)
         return Harness(coordinator: coordinator, transport: transport, runner: runner, audit: audit, clock: clock)
@@ -355,6 +358,33 @@ struct AppCoordinatorTests {
         #expect(h.runner.runCount == 0)                 // /cd never spawns a process
         #expect(h.transport.sentMessages.contains { $0.text.contains("relayback") && $0.text.contains("/Users/op/dev/RelayBack") })
         #expect(h.audit.entries.map(\.event).contains(.control("cd relayback")))
+    }
+
+    // S25: bare `/cd` offers the configured repos as a one-time tap keyboard (names only), never
+    // spawning anything, and audits a secret-free "cd prompt" line.
+    @Test func bareCdOffersAKeyboardOfConfiguredRepos() async {
+        let h = makeRepoHarness(repos: [relayback, notes])
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd"))
+
+        #expect(h.runner.runCount == 0)
+        let prompt = h.transport.sentMessages.last
+        #expect(prompt?.markup == .keyboard(["relayback", "notes"]))   // one tappable button per repo
+        #expect(prompt?.text.lowercased().contains("select a repo") == true)
+        #expect(h.audit.entries.map(\.event).contains(.control("cd prompt")))
+    }
+
+    // S25: tapping a repo button after the picker (its bare name arrives as the next message) sets
+    // the active repo end-to-end — same reply + audit as `/cd <name>`, still no process spawned.
+    @Test func tappingARepoButtonAfterTheCdPromptSelectsIt() async {
+        let h = makeRepoHarness(repos: [relayback, notes])
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd"))       // picker shown
+        await h.coordinator.handle(update(fromId: allowed, text: "notes"))     // tapped button
+
+        #expect(h.runner.runCount == 0)
+        #expect(h.transport.sentMessages.contains { $0.text.contains("notes") && $0.text.contains("/Users/op/dev/Notes") })
+        #expect(h.audit.entries.map(\.event).contains(.control("cd notes")))
     }
 
     @Test func repoScopedCommandWithNoActiveRepoWarnsAndDoesNotRun() async {

@@ -464,6 +464,92 @@ struct AuthGuardTests {
         #expect(guardState.authorize(fromId: allowed, text: "/cd relayback") == .disarmed)
     }
 
+    // MARK: - /cd repo picker (S25) — bare `/cd` offers the configured repos to pick from
+
+    // Armed `/cd` with no name offers the configured repos instead of an error.
+    @Test func bareCdOffersTheConfiguredReposToPick() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/cd") == .control(.cdPrompt([relayback, notes])))
+        #expect(guardState.currentRepo == nil)   // nothing selected yet — awaiting the pick
+    }
+
+    // After the picker, the operator's next (bare, non-command) message — a tapped button — selects.
+    @Test func repoNameAfterCdPromptSelectsIt() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/cd") == .control(.cdPrompt([relayback, notes])))
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .control(.activeRepoSet(notes)))
+        #expect(guardState.currentRepo == notes)
+    }
+
+    // A name that isn't configured, supplied after the picker, is refused — nothing is selected.
+    @Test func unknownRepoNameAfterCdPromptIsRejected() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd")
+        #expect(guardState.authorize(fromId: allowed, text: "nope") == .invalidParameters("unknown repo"))
+        #expect(guardState.currentRepo == nil)
+    }
+
+    // Issuing a new command instead of picking cancels the picker: the command is handled normally,
+    // and a later bare word is no longer consumed as a repo name (mirrors the /arm prompt, S20).
+    @Test func commandAfterCdPromptCancelsThePicker() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd")
+        #expect(guardState.authorize(fromId: allowed, text: "/status") == .control(.status(isArmed: true)))
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .unknownCommand)   // picker cancelled
+        #expect(guardState.currentRepo == nil)
+    }
+
+    // A bare repo name is ONLY consumed right after the picker — otherwise it is unknown, so an idle
+    // word can never silently switch the active repo out of context (the I2-style guard from S20).
+    @Test func bareRepoNameWithoutPromptIsUnknown() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .unknownCommand)
+        #expect(guardState.currentRepo == nil)
+    }
+
+    // Bare `/cd` while disarmed still tells the operator to arm — it does NOT leak the repo names,
+    // and no pick is awaited (a following bare word is unknown, not a silent selection).
+    @Test func bareCdWhileDisarmedDoesNotOfferThePicker() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        #expect(guardState.authorize(fromId: allowed, text: "/cd") == .disarmed)
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .unknownCommand)
+    }
+
+    // With no repos configured, bare `/cd` says so rather than showing an empty picker, and awaits
+    // nothing (a following word is unknown, not consumed).
+    @Test func bareCdWithNoReposConfiguredSaysSo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/cd") == .invalidParameters("no repos configured"))
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .unknownCommand)
+    }
+
+    // Disarming (the popover button) drops a pending picker, so a bare word after re-arming is not
+    // consumed as a repo name — the awaited-pick state does not survive the session.
+    @Test func disarmMethodClearsAPendingCdPicker() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd")   // picker shown, awaiting a pick
+        guardState.disarm()
+        armed(&guardState, clock)                                // re-arm a fresh session
+        #expect(guardState.authorize(fromId: allowed, text: "notes") == .unknownCommand)
+        #expect(guardState.currentRepo == nil)
+    }
+
     @Test func pwdReportsActiveRepoAndReposListsConfigured() {
         let clock = TestClock(start)
         var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback, notes])

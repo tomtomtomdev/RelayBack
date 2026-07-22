@@ -13,6 +13,16 @@
 import Foundation
 
 enum RepoListPresentation {
+    /// The prompt shown above the `/cd` repo picker (S25). A fixed string — no secret, no path.
+    static let selectPrompt = "📁 Select a repo:"
+
+    /// The `/cd` picker button labels (S25): one per configured repo, disclosing ONLY the name —
+    /// never the root or build config (even less than `/repos`, which shows name + root). The
+    /// coordinator maps these to a one-time reply keyboard the operator taps.
+    static func pickerButtons(_ repos: [RepoConfig]) -> [String] {
+        repos.map(\.name)
+    }
+
     /// The `/repos` reply: the configured repo allowlist as name + root, one block per repo.
     static func list(_ repos: [RepoConfig]) -> String {
         guard !repos.isEmpty else { return "No repos configured." }

@@ -52,6 +52,7 @@ enum ControlResult: Equatable {
     case activeRepoSet(RepoConfig)      // /cd <repo> → active repo is now this one
     case workingDirectory(RepoConfig?)  // /pwd → the active repo (nil when none selected)
     case repoList([RepoConfig])         // /repos → the configured repo allowlist
+    case cdPrompt([RepoConfig])         // /cd with no name → offer the configured repos to pick (S25)
 }
 
 struct AuthGuard {
@@ -109,6 +110,12 @@ struct AuthGuard {
     /// so their next bare (non-command) message is consumed as that code. Cleared once consumed,
     /// when a new command is issued instead, or on disarm — a bare number never arms out of context.
     private var awaitingArmCode = false
+
+    /// True after `/cd` was sent with no name (S25): the operator was shown the repo picker, so
+    /// their next bare (non-command) message — typically a tapped keyboard button — is consumed as
+    /// the repo name. Cleared once consumed, when a new command is issued instead, or on disarm, so
+    /// a bare word never silently switches the active repo out of context (mirrors `awaitingArmCode`).
+    private var awaitingRepoName = false
 
     init(allowlist: Set<Int64>,
          totpSecret: Data,
@@ -168,6 +175,7 @@ struct AuthGuard {
         armedUntil = nil
         activeRepo = nil
         awaitingArmCode = false             // S20: drop any pending "type your code" prompt
+        awaitingRepoName = false            // S25: drop any pending "pick a repo" prompt
     }
 
     /// True while the armed window is still open.
@@ -202,6 +210,18 @@ struct AuthGuard {
                 return .control(handleArmCode(token))
             }
             // A new command instead of the code cancels the prompt — fall through and handle it.
+        }
+
+        // S25: after a code-less `/cd`, the operator's next non-command message (a tapped repo
+        // button, or a typed name) is consumed as the repo to select. Match the whole trimmed
+        // message so a name with spaces survives; a leading `/` is a new command that cancels it.
+        if awaitingRepoName {
+            awaitingRepoName = false
+            if !token.hasPrefix("/") {
+                guard isArmed else { return .disarmed }   // session may have idled out since the prompt
+                return selectRepo(named: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            // A new command instead of a repo name cancels the picker — fall through and handle it.
         }
 
         switch token {
@@ -242,13 +262,23 @@ struct AuthGuard {
     // MARK: - Private
 
     /// Selects the session's active repo (§4a / S16). Gated on arm state first (I2) so a disarmed
-    /// operator is told to arm rather than shown which repo names exist. The name is matched exactly
-    /// against the configured allowlist — no path comes from chat, so traversal is impossible.
+    /// operator is told to arm rather than shown which repo names exist. With no name (S25), the
+    /// configured repos are offered as a picker instead of an error, and the operator's next message
+    /// is consumed as the choice (`awaitingRepoName`). The name is matched exactly against the
+    /// configured allowlist — no path comes from chat, so traversal is impossible.
     private mutating func handleCd(_ text: String) -> Decision {
         guard isArmed else { return .disarmed }
         guard let name = operatorArguments(in: text).first else {
-            return .invalidParameters("usage: /cd <repo>")
+            guard !repoConfigs.isEmpty else { return .invalidParameters("no repos configured") }
+            awaitingRepoName = true
+            return .control(.cdPrompt(repoConfigs))
         }
+        return selectRepo(named: name)
+    }
+
+    /// Sets the active repo by exact name match (shared by `/cd <name>` and the S25 picker reply).
+    /// A name not on the configured allowlist is refused — nothing is selected.
+    private mutating func selectRepo(named name: String) -> Decision {
         guard let repo = repoConfigs.first(where: { $0.name == name }) else {
             return .invalidParameters("unknown repo")
         }

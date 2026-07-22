@@ -21,16 +21,29 @@ struct BotCommand: Encodable, Equatable {
     let description: String
 }
 
+/// The Bot API `reply_markup` attached to an outgoing message. Modelled as a closed set so the
+/// coordinator picks an intent and the transport owns the wire shape:
+///   • `.none` — an ordinary reply, no markup.
+///   • `.forceReply` — `force_reply`, so the client opens the keyboard for a free-text answer
+///     (used to prompt for the TOTP code after a code-less `/arm`, S20).
+///   • `.keyboard(buttons)` — a one-time custom reply keyboard, one tappable button per string,
+///     so the operator picks from options instead of typing (the `/cd` repo picker, S25). The
+///     button labels are the only thing disclosed — keep them free of secrets/paths (I3).
+enum ReplyMarkup: Equatable {
+    case none
+    case forceReply
+    case keyboard([String])
+}
+
 protocol TelegramTransport {
     /// Long-poll for updates with `update_id >= offset`, returning the decoded batch (may be
     /// empty). The offset advances past processed updates so none is reprocessed (FR-1).
     func getUpdates(offset: Int64) async throws -> [TelegramUpdate]
 
-    /// Send a text reply to `chatId` (already chunked ≤ 4096 chars by `OutputFormatter`). When
-    /// `forceReply` is true the message carries a Bot API `force_reply` markup, so the Telegram
-    /// client opens the keyboard for the operator to type a reply — used to prompt for the TOTP
-    /// code after a code-less `/arm` (S20). See the `sendMessage(chatId:text:)` convenience below.
-    func sendMessage(chatId: Int64, text: String, forceReply: Bool) async throws
+    /// Send a text reply to `chatId` (already chunked ≤ 4096 chars by `OutputFormatter`), with the
+    /// given `reply_markup` (`.none` for an ordinary reply). See the `sendMessage(chatId:text:)`
+    /// and `sendMessage(chatId:text:forceReply:)` convenience overloads below.
+    func sendMessage(chatId: Int64, text: String, markup: ReplyMarkup) async throws
 
     /// Send `data` as a file attachment to `chatId` — used for oversized command output (FR-6).
     func sendDocument(chatId: Int64, filename: String, data: Data) async throws
@@ -46,6 +59,11 @@ protocol TelegramTransport {
 extension TelegramTransport {
     /// Convenience for the common case: an ordinary reply with no reply-keyboard markup.
     func sendMessage(chatId: Int64, text: String) async throws {
-        try await sendMessage(chatId: chatId, text: text, forceReply: false)
+        try await sendMessage(chatId: chatId, text: text, markup: .none)
+    }
+
+    /// Convenience for the S20 arm prompt: `force_reply` when `forceReply`, otherwise no markup.
+    func sendMessage(chatId: Int64, text: String, forceReply: Bool) async throws {
+        try await sendMessage(chatId: chatId, text: text, markup: forceReply ? .forceReply : .none)
     }
 }

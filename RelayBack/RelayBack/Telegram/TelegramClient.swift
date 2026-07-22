@@ -65,16 +65,33 @@ struct TelegramClient: TelegramTransport {
         return try TelegramUpdate.decodeBatch(from: data)
     }
 
-    func sendMessage(chatId: Int64, text: String, forceReply: Bool) async throws {
-        struct ForceReplyMarkup: Encodable { let forceReply: Bool }   // → {"force_reply": true}
+    func sendMessage(chatId: Int64, text: String, markup: ReplyMarkup) async throws {
+        // One wire struct covers every reply_markup we emit; nil fields are omitted by the encoder,
+        // so `.forceReply` sends only {"force_reply":true} and `.keyboard` only the keyboard block.
+        struct KeyboardButton: Encodable { let text: String }
+        struct Markup: Encodable {
+            var forceReply: Bool?
+            var keyboard: [[KeyboardButton]]?          // rows of buttons — one button per row here
+            var resizeKeyboard: Bool?
+            var oneTimeKeyboard: Bool?
+        }
         struct Params: Encodable {
             let chatId: Int64
             let text: String
-            let replyMarkup: ForceReplyMarkup?                        // omitted when nil
+            let replyMarkup: Markup?                   // omitted when nil (an ordinary reply)
         }
-        let markup = forceReply ? ForceReplyMarkup(forceReply: true) : nil
+        let replyMarkup: Markup?
+        switch markup {
+        case .none:
+            replyMarkup = nil
+        case .forceReply:
+            replyMarkup = Markup(forceReply: true)
+        case let .keyboard(buttons):
+            replyMarkup = Markup(keyboard: buttons.map { [KeyboardButton(text: $0)] },
+                                 resizeKeyboard: true, oneTimeKeyboard: true)
+        }
         _ = try await perform(jsonRequest(method: "sendMessage",
-                                          body: Params(chatId: chatId, text: text, replyMarkup: markup)))
+                                          body: Params(chatId: chatId, text: text, replyMarkup: replyMarkup)))
     }
 
     func setMyCommands(_ commands: [BotCommand]) async throws {

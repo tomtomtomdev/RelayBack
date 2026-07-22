@@ -193,7 +193,11 @@ Control commands (handled internally, always available to allowlisted users):
 - `/status` — report armed/disarmed + remaining time (no action execution).
 - `/help` or `/start` — list available action commands.
 - `/repos` — list the configured repos (name + root only). Requires an armed session (S16).
-- `/cd <name>` — select the active repo for subsequent git/build/sim commands (S16).
+- `/cd <name>` — select the active repo for subsequent git/build/sim commands (S16). Sending
+  `/cd` **without** a name (e.g. tapping it from the command menu) offers the configured repos as
+  a one-time tap keyboard (button labels are repo names only — no root/config, I3), and the
+  operator's next message is consumed as the pick; a new command instead cancels the picker (S25).
+  With no repos configured it replies `⚠️ no repos configured`. Requires an armed session.
 - `/pwd` — report the active repo (name + root), or prompt to `/cd` first (S16).
 
 Action commands: each registry `Action` exposes a `command`. Sending it, while armed and
