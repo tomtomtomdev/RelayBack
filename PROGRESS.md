@@ -5,6 +5,58 @@
 
 ## Current state
 
+- **S28 done — pure `Core/ReleaseCommand` config→steps builder (secret-free).** The second code slice
+  of the PGYER epic (S26–S30). Turns the S27 persistence (repo release fields + endpoint URL) into the
+  `/release` archive→export→upload plan and the `/pgyer` upload-only step — all pure, no I/O, no
+  routing yet. New pieces (`Core/ReleaseCommand.swift` + `RelayBackTests/Core/ReleaseCommandTests.swift`):
+  - **`ReleaseCommandSpec`** (`command` + `description`, shape-identical to `SimulatorCommandSpec`) with
+    **two canonical constants**: `ReleaseCommand.spec` (`/release`) and `ReleaseCommand.pgyerSpec`
+    (`/pgyer`). Two specs (not one struct with two tokens) so S29 can inject/route/advertise each
+    independently, mirroring how the guard already takes a `SimulatorCommandSpec?`.
+  - **`ReleaseCommand.plan(for:uploadURL:) -> ReleaseResolution`** — the full pipeline. Builds two fixed
+    `/usr/bin/xcodebuild` `Action`s in the repo root, tagged `/release`, 1800s each (reused `/sim`
+    build timeout): **(1)** `archive -workspace <cfg> -scheme <cfg> -archivePath <root>/build/<scheme>.xcarchive
+    -sdk iphoneos -configuration Release`; **(2)** `-exportArchive -archivePath <same> -exportOptionsPlist
+    <cfg> -exportPath <root>/build`. `-sdk iphoneos -configuration Release` are in-code constants; every
+    variable value comes only from `RepoConfig` (I1). Returns `.ok(ReleasePlan{buildSteps, upload})` or
+    `.invalid(reason:)`. Fails closed on any missing `workspace`/`scheme`/`exportOptionsPlist`/`uploadArtifact`
+    — nothing is built (§4c).
+  - **`ReleaseCommand.upload(for:uploadURL:) -> PgyerResolution`** — the `/pgyer` upload-only builder;
+    requires only `uploadArtifact` (a pre-built `.ipa`/`.dmg` needs no rebuild). `plan` reuses it for
+    the artifact check + resolution and **propagates its refusal**, so the two paths can never diverge
+    on what counts as a valid upload.
+  - **`PgyerUpload`** (secret-free `artifact`/`url`/`note`) + **`configFileBody(apiKey:)`** — the pure
+    body of the 0600 `curl --config` file: `form = "_api_key=<key>"`, `form = "file=@<artifact>"`, and
+    (only when the repo sets a `pgyerDescription`) `form = "buildUpdateDescription=<note>"`. The **key
+    is a parameter, never stored** — it materializes only in this returned string, which S29's
+    coordinator writes to a temp file and deletes. The endpoint URL rides as a curl *argument* (per PLAN
+    S29 `curl --config <path> <url>`), so it is deliberately **not** repeated in the config body.
+  - **Decisions locked:**
+    - *I3-at-the-builder proven structurally.* `ReleaseCommand.plan`/`.upload` take **no key argument at
+      all**, so nothing they return can hold one; `planNeverCarriesTheApiKey` scans every string
+      reachable from the plan for a sentinel and asserts absence, then confirms `configFileBody` is the
+      sole place it appears. This is the S28 half of the epic's key-egress guarantee; the argv/`ps`/audit/
+      reply-never-contains-key tests land in **S29** where the key actually flows through the coordinator.
+    - *Derived `build/` layout, absolute paths.* Archive/export write under `<root>/build/` (archive =
+      `<root>/build/<scheme>.xcarchive`, export dir = `<root>/build`); `uploadArtifact` is resolved to an
+      absolute path under the root when relative (already-absolute used as-is) so curl's `file=@` is
+      cwd-independent. Private `buildPath`/`resolve` helpers normalize a trailing slash on the root for
+      deterministic argv.
+    - *`buildUpdateDescription` chosen for the note.* SPEC §4c only gives `_api_key=…` as the sample form
+      field; `buildUpdateDescription` is PGYER apiv2's update-note field. Implementation detail, no SPEC
+      change; the note is per-repo config (`pgyerDescription`), never operator free-text.
+  - **Not yet routable.** No `/release`/`/pgyer` command matches in the guard; `AuthGuard`/coordinator/
+    `AppRuntime` are untouched. Routing + the real 0600 `--config` write + curl spawn are **S29**.
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **`, then full
+    `RelayBackTests` = **374 tests / 40 suites** passing (exit 0) via `test-without-building` after
+    `pkill -9 -f RelayBack.app`. +15 tests / +1 suite (all `ReleaseCommandTests`): spec tokens (2),
+    archive/export argv-from-config, every-step-in-root/I1, release + pgyer upload metadata, four
+    `/release` missing-field rejections + the `/pgyer` no-artifact rejection, `configFileBody`
+    carries-key/omits-absent-note (2), and the `planNeverCarriesTheApiKey` I3 check. One `-only-testing`
+    re-run flaked on the documented LSUIElement host-launch quirk (`TEST EXECUTE FAILED`, zero test
+    lines); a clean re-run passed all 15 — the full-suite run above is the authoritative green.
+    **Next slice: S29** (guard routing `Decision.runRelease`/`.runPgyerUpload` + coordinator run with the
+    `CurlConfigWriting` seam + PGYER-key provider).
 - **S27 done — persistence foundation for `/release` + `/pgyer` (secret + config + repo-config fields).**
   The first code slice of the PGYER epic (S26–S30). No user-facing behavior yet — it lays the storage
   seams the S28 builder / S29 coordinator will consume. TDD, all pure/thin-I/O. New pieces:

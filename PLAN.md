@@ -549,6 +549,18 @@ that the key never reaches an argv slot, the audit line, or a reply.
   each missing-field rejection; `configFileBody` carries key + form fields; **plan is secret-free**
   (no key in `buildSteps`/`upload` — the I3-at-the-builder check).
 - **Done when:** builder tests green; not yet routable.
+- ✅ **Done** — 374 tests / 40 suites green (+15 / +1). `Core/ReleaseCommand` with `spec` (`/release`)
+  + `pgyerSpec` (`/pgyer`); `plan(for:uploadURL:)` builds two fixed `/usr/bin/xcodebuild` steps
+  (`archive` → `-exportArchive`) in the repo root from config, deriving `<root>/build/` paths, fixed
+  `-sdk iphoneos -configuration Release`, failing closed on any missing `workspace`/`scheme`/
+  `exportOptionsPlist`/`uploadArtifact`; `upload(for:uploadURL:)` is the `/pgyer`-only builder (artifact
+  required, reused by `plan` with its refusal propagated). `PgyerUpload` (secret-free artifact/url/note)
+  + `configFileBody(apiKey:)` emits the 0600 `curl --config` form fields (`_api_key`/`file`/optional
+  `buildUpdateDescription`); the key is a parameter, never in the plan (`planNeverCarriesTheApiKey`
+  proves it structurally — the S28 half of the key-egress invariant; argv/ps/audit/reply checks land in
+  S29). **Decisions:** two specs (not one) for independent S29 routing; endpoint URL rides as a curl arg
+  (not in the config body) per S29's `curl --config <path> <url>`; `buildUpdateDescription` = PGYER
+  apiv2's note field. Not routable yet (guard/coordinator/`AppRuntime` untouched).
 
 ### S29 — Guard routing + coordinator run *(TDD)*
 - **Goal:** route `/release`/`/pgyer` and run them.
