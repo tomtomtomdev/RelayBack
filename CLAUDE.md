@@ -59,8 +59,10 @@ one, stop and flag it.
   paths + fixed arg arrays are spawned via `Process`. Never `/bin/sh -c <anything>`.
 - **I2 — No run unless authorized AND armed.** An action executes only when `from.id` is on
   the allowlist *and* the session is ARMED. Check `from.id`, never chat id.
-- **I3 — Secrets only in Keychain.** Bot token and TOTP secret are read only from Keychain;
-  never hard-coded, logged, written to the audit log, or sent to Telegram.
+- **I3 — Secrets only in Keychain.** Bot token, TOTP secret, and the PGYER API key (SPEC §4c) are
+  read only from Keychain; never hard-coded, logged, written to the audit log, or sent to Telegram.
+  The PGYER key is additionally kept out of the upload process's argv — passed via a 0600 `curl
+  --config` file (deleted after the run) — so it never reaches `ps`. A missing key fails closed.
 - **I4 — Never elevate.** `Process` runs as the normal user with a restricted PATH; never
   root, never with privilege escalation.
 - **I5 — Agent action is gated (SPEC §4b, S20+).** `/claude` runs only if `claudeEnabled` AND
@@ -104,3 +106,7 @@ relevant invariant still holds.
   SPEC §8 (the sandbox blocks `Process` spawning and would break the app's core purpose).
 - Don't add arbitrary-shell or free-text-parameter execution — that's an out-of-scope future
   phase (SPEC §2). If the user asks for it, update the SPEC deliberately first.
+- Off-box egress is bounded to what SPEC §4c scopes: the `/release`/`/pgyer` upload sends the
+  *configured* artifact to the *configured* endpoint only (both config, never chat). Don't add a new
+  network destination, an operator-supplied URL, or a second stored third-party secret without a
+  deliberate SPEC amendment first — and any such secret goes in Keychain, never `ConfigStore`.

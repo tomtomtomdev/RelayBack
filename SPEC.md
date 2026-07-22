@@ -39,6 +39,10 @@ sends stdout/stderr/exit-code back to the chat.
   unvalidatable by design, so it is **not** a §4a validated slot — it is contained instead by
   what Claude Code is permitted to do, §4b, not by a RelayBack validator.)*
 - **No webhooks / inbound network server.** Outbound long-polling only.
+  *(Amended S26+: outbound is no longer *only* long-polling — the git `push`/`pull` of §4a reach each
+  repo's own upstream, and the release action §4c uploads a configured build artifact to a third-party
+  service (PGYER). There is still no **inbound** server; the new egress is deliberate, bounded to a
+  configured artifact + endpoint, and gated exactly like every other armed action. See §4c.)*
 - **No multi-tenant / multi-Mac fleet.** One operator, one Mac.
 - **No notarization/sandbox in v1.** Personal local install. (Re-evaluate before sharing.)
 - **End-to-end secrecy is NOT promised.** See threat model §4.
@@ -73,8 +77,8 @@ sends stdout/stderr/exit-code back to the chat.
    `/bin/sh -c`**. This removes shell injection from the threat model by construction.
 4. **Execution hygiene.** Run as the normal user (never root), restricted `PATH`,
    per-action timeout that kills the process, single-action concurrency.
-5. **Secret storage.** Bot token and TOTP secret live in the macOS Keychain only — never
-   in source, plists, logs, or audit entries.
+5. **Secret storage.** Bot token, TOTP secret, and the PGYER API key (§4c) live in the macOS
+   Keychain only — never in source, plists, logs, or audit entries.
 6. **Audit log.** Append-only local record of every received command: timestamp,
    `from.id`, matched action (or "rejected: reason"), exit code. No secrets, no full output.
 
@@ -86,7 +90,9 @@ sends stdout/stderr/exit-code back to the chat.
   passing that slot's validator and a `--` flag-guard — never concatenated, never a flag,
   never the executable. "No shell, ever" is unchanged.
 - I2. No action executes unless: `from.id` ∈ allowlist **AND** session is ARMED.
-- I3. Token and TOTP secret are read only from Keychain; never logged or sent to Telegram.
+- I3. Token, TOTP secret, and the PGYER API key (§4c) are read only from Keychain; never logged,
+  written to the audit log, or sent to Telegram. The PGYER key is additionally kept out of the upload
+  process's argv (passed via a 0600 `curl --config` file), so it is not exposed to a same-user `ps`.
 - I4. Process is never spawned with elevated privileges.
 - I5. `/claude` (§4b) runs only if `claudeEnabled` **AND** session is ARMED **AND** an active repo
   is selected. It is spawned non-interactively, cwd = that repo's root, with the configured
@@ -182,6 +188,46 @@ active repo. Accepted for single-operator personal use with `claudeEnabled` an e
 choice; revisit before any shared deployment. A hard timeout-kill mid-run can leave the repo in a
 partially-edited state — acceptable for v1; streaming + `/kill` is deferred (§10).
 
+### 4c. Release & distribution action (`/release`, `/pgyer`, S26+)
+
+`/release` builds an iOS archive, exports an `.ipa`, and uploads it to PGYER — an ordered,
+config-built sequence in the spirit of `/sim` (§4a). `/pgyer` runs the upload step alone, on the
+repo's configured artifact (so a pre-built `.ipa`/`.dmg` can be shipped without a rebuild). Both are
+repo-scoped and require `/cd` first. This is the first action that sends data **off the Mac to a
+third party**, so it is scoped deliberately here.
+
+**Controls (all must hold, in addition to I2's arm + identity gates):**
+- **All argv from config — never chat.** The archive/export steps are fixed `/usr/bin/xcodebuild`
+  invocations whose variable values (`-workspace`, `-scheme`, `-archivePath`, `-exportOptionsPlist`,
+  `-exportPath`) come only from the active repo's `RepoConfig`; `-sdk iphoneos -configuration Release`
+  are fixed in code. The upload is a fixed `/usr/bin/curl` invocation; the artifact path and build
+  note come from `RepoConfig`, the endpoint URL from `ConfigStore` (default
+  `https://www.pgyer.com/apiv2/app/upload`). `/release`/`/pgyer` take **no operator argument**. I1 is
+  unchanged — no shell, no operator text in any argv slot.
+- **PGYER API key is a Keychain secret (I3).** The key lives only in the Keychain (like the bot
+  token). It is read at the upload step and written into a **0600 `curl --config` file** (`form =
+  "_api_key=…"`), so it never appears in argv (`ps`), never in the audit log, never in a reply. The
+  config file is deleted after the run. A missing/empty key **fails closed**: the upload is refused
+  (`.invalidParameters("no PGYER API key configured")`) and nothing spawns.
+- **Fixed per-repo output layout.** The archive/export steps write under a derived `build/` directory
+  in the repo root; the operator configures which produced file (`.ipa`/`.dmg`) is uploaded via the
+  repo's `uploadArtifact`. A repo missing any required field (`workspace`, `scheme`,
+  `exportOptionsPlist`, `uploadArtifact`) is refused — nothing spawns (fails closed, §4a-style).
+- **Sequence semantics reused.** `/release`'s steps run in order and stop on the first non-zero exit
+  (a failed archive never exports; a failed export never uploads) — the `/sim` contract.
+- **Execution hygiene + audit reused.** Each step spawns an absolute-path tool as the normal user
+  under the restricted PATH (I4). Each step audits one line — timestamp, `from.id`, `action=/release`
+  (or `/pgyer`), exit code — **no key, no URL body, no output** (I3), matching every other command.
+
+**Threat-model note.** This widens the worst-case-on-full-auth-bypass from "mutating git state +
+builds in the configured repos" (§4a) to *also* "**uploading the configured build artifact to the
+configured PGYER account**." An attacker with full auth bypass could ship a build to PGYER using the
+stored key, or trigger archive/export writes under the repo's `build/` dir. It does **not** grant a
+shell, arbitrary file writes outside that `build/` dir, arbitrary executables, arbitrary upload
+targets (the endpoint + artifact are config, not chat), or exfiltration of the key itself (it is
+never echoed). Accepted for single-operator personal use; the upload is opt-in per configured
+artifact and the key is a deliberate Keychain entry. Revisit before any shared deployment.
+
 ## 5. Command grammar (operator-facing)
 
 Control commands (handled internally, always available to allowlisted users):
@@ -214,6 +260,13 @@ Dev-workflow commands (§4a, run in the active repo; require `/cd` first):
 - `/sim` — build → boot the configured simulator device → reveal Simulator.app; no argument,
   stops on the first failing step (S19).
 
+Release & distribution commands (§4c, run in the active repo; require `/cd` first):
+- `/release` — archive → export `.ipa` → upload to PGYER; config-built, no argument, stops on the
+  first failing step (S26+). Requires the repo's `workspace`/`scheme`/`exportOptionsPlist`/
+  `uploadArtifact` and a PGYER API key in Keychain, else refused (nothing spawns).
+- `/pgyer` — upload the repo's configured `uploadArtifact` (`.ipa`/`.dmg`) to PGYER only, without a
+  rebuild; no argument. Same key/artifact preconditions (S26+).
+
 Agent command (§4b, run in the active repo; requires `/cd` first):
 - `/claude <prompt>` — run Claude Code headless in the active repo with the configured permission
   profile; returns its output. Requires `claudeEnabled` (§4b) and an armed session with an active
@@ -244,6 +297,12 @@ Agent command (§4b, run in the active repo; requires `/cd` first):
   stdout/stderr/exit code under the agent timeout, delivers via the existing formatter
   (chunk-or-document), and writes a secret-free audit line. Disabled or no active repo → an
   `.invalidParameters` reply, nothing spawned.
+- **FR-12 Release & distribution.** When armed with an active repo, `/release` runs the config-built
+  `xcodebuild archive → xcodebuild -exportArchive → curl upload` sequence (stop-on-first-failure), and
+  `/pgyer` runs the upload step alone on the repo's configured artifact. Values come only from
+  `RepoConfig` + `ConfigStore` (endpoint URL) + the Keychain (PGYER key); the key is passed via a
+  0600 `curl --config` file (never argv), and a missing key/field refuses the run. Each step delivers
+  via the existing formatter and writes a secret-free audit line (§4c). No operator argument.
 
 ## 7. Architecture & modules
 
@@ -254,9 +313,9 @@ testable with fakes — no live network or real process spawning in tests.
 ```
 RelayBack/
 ├── App/         RelayBackApp (entry), AppCoordinator (orchestration brain)
-├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock, ClaudeInvocation   ← pure, TDD-first
+├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock, ClaudeInvocation, ReleaseCommand   ← pure, TDD-first
 ├── Telegram/    TelegramTransport (protocol), TelegramClient (URLSession), TelegramModels
-├── Execution/   CommandRunning (protocol), ProcessCommandRunner (Process impl), ClaudeRunning (+ ProcessClaudeRunner)
+├── Execution/   CommandRunning (protocol), ProcessCommandRunner (Process impl), ClaudeRunning (+ ProcessClaudeRunner), CurlConfigWriting
 ├── Storage/     KeychainStore (protocol + impl), AuditLog
 ├── Features/    MenuBar/, Settings/   ← SwiftUI views
 └── Resources/   Assets, RelayBack.entitlements
@@ -287,6 +346,15 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
   async -> CommandResult }` with an in-memory fake; real `ProcessClaudeRunner` reuses the S7
   `Process` timeout/kill machinery. `ClaudeProfile` config (`executablePath`, `permissionProfile`,
   `timeout`, optional `model`) + `claudeEnabled` live in `ConfigStore`.
+- **ReleaseCommand** (Core, S26+) — pure builder `(RepoConfig, uploadURL) -> ReleasePlan | invalid`:
+  the fixed `xcodebuild` archive/export `Action`s + secret-free `PgyerUpload` metadata (artifact,
+  URL, optional note). Also emits the `curl --config` file body given a key (pure). No I/O, and **no
+  secret in the plan** — the key is added only at spawn time. `/release`/`/pgyer` route through
+  `AuthGuard` like `/sim`. The PGYER key is a Keychain secret (`SecretStore`); the endpoint URL is
+  non-secret config (`ConfigStore`, default `https://www.pgyer.com/apiv2/app/upload`).
+- **CurlConfigWriting** (Execution, S26+) — protocol + in-memory fake; the real impl writes the 0600
+  `curl --config` file (carrying the PGYER key + form fields) to a temp path and deletes it after the
+  upload. Keeps the key out of argv and the coordinator unit-testable without touching the real FS.
 
 ## 8. Tech & platform decisions
 
@@ -311,6 +379,10 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
 - Phase-2 confirmation-gated arbitrary execution (inline-keyboard ✅/❌). **Partly realized
   2026-07-19 by the agent action §4b — `/claude` is the restricted-agent form of remote execution
   (still not a shell), gated by a capability toggle rather than a per-run confirmation.**
+- Remote build distribution (upload artifacts to a service). **Scoped in 2026-07-22 as the release
+  action §4c — `/release`/`/pgyer` upload the configured build artifact to PGYER, config-bounded and
+  armed-gated. The first deliberate off-box egress of data; `-sdk`/`-configuration` fixed for v1 and
+  a per-repo build config is the natural follow-up.**
 - Developer ID signing + notarization if the app is ever shared.
 - Streaming partial output + `/kill` for long-running actions. **The open item S23 would close (a
   persistent Claude Code session with streamed output + `/kill`); §4b's `/claude` is one-shot.**
