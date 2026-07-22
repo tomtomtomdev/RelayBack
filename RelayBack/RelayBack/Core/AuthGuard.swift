@@ -44,7 +44,8 @@ enum Decision: Equatable {
 /// The result of a control command.
 enum ControlResult: Equatable {
     case armAccepted        // valid TOTP → session now armed
-    case armRejected        // missing / invalid TOTP → still disarmed
+    case armRejected        // invalid TOTP → still disarmed
+    case armPrompt          // /arm with no code → ask the operator to type it (S20)
     case disarmAccepted     // session dropped to disarmed
     case status(isArmed: Bool)
     // S16 — repo navigation (never executes a process; all report/mutate session state):
@@ -104,6 +105,11 @@ struct AuthGuard {
     /// `var` so a Settings edit can hot-reload it (`updateClaudeConfig`, S22).
     private var claudeProfile: ClaudeProfile
 
+    /// True after `/arm` was sent with no code (S20): the operator was prompted to type the code,
+    /// so their next bare (non-command) message is consumed as that code. Cleared once consumed,
+    /// when a new command is issued instead, or on disarm — a bare number never arms out of context.
+    private var awaitingArmCode = false
+
     init(allowlist: Set<Int64>,
          totpSecret: Data,
          registry: ActionRegistry,
@@ -161,6 +167,7 @@ struct AuthGuard {
     mutating func disarm() {
         armedUntil = nil
         activeRepo = nil
+        awaitingArmCode = false             // S20: drop any pending "type your code" prompt
     }
 
     /// True while the armed window is still open.
@@ -186,6 +193,15 @@ struct AuthGuard {
 
         guard let token = text.split(whereSeparator: \.isWhitespace).first?.lowercased() else {
             return .unknownCommand   // empty / whitespace-only message from an allowlisted user
+        }
+
+        // S20: after a code-less `/arm`, the operator's next non-command message is the TOTP code.
+        if awaitingArmCode {
+            awaitingArmCode = false
+            if !token.hasPrefix("/") {
+                return .control(handleArmCode(token))
+            }
+            // A new command instead of the code cancels the prompt — fall through and handle it.
         }
 
         switch token {
@@ -320,10 +336,19 @@ struct AuthGuard {
     }
 
     private mutating func handleArm(_ text: String) -> ControlResult {
-        let wasArmed = isArmed
         let parts = text.split(whereSeparator: \.isWhitespace)
-        guard parts.count >= 2 else { return .armRejected }         // "/arm" with no code
-        guard TOTP.validate(String(parts[1]), secret: totpSecret, at: clock.now) else {
+        guard parts.count >= 2 else {
+            awaitingArmCode = true          // S20: "/arm" with no code → prompt for it, don't reject
+            return .armPrompt
+        }
+        return handleArmCode(String(parts[1]))
+    }
+
+    /// Validates one TOTP code and, on success, arms the session — used both for `/arm <code>` and
+    /// for the bare code that follows a code-less `/arm` prompt (S20).
+    private mutating func handleArmCode(_ code: String) -> ControlResult {
+        let wasArmed = isArmed
+        guard TOTP.validate(code, secret: totpSecret, at: clock.now) else {
             return .armRejected
         }
         if !wasArmed { activeRepo = nil }   // arming a fresh session starts with no active repo (§4a)

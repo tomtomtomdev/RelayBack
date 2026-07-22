@@ -30,59 +30,16 @@ struct ActionRegistry {
 }
 
 extension ActionRegistry {
-    /// The v1 seed allowlist: read-only diagnostics runnable on the unattended Mac.
-    /// Each entry is an absolute path with a fixed argument array (invariant I1) run as the
-    /// normal user under a restricted PATH by the runner (invariant I4).
-    static let seed = ActionRegistry(actions: [
-        Action(command: "/uptime",
-               description: "System uptime and load",
-               executable: "/usr/bin/uptime",
-               arguments: [],
-               timeout: 10),
-        Action(command: "/disk",
-               description: "Disk usage, human-readable",
-               executable: "/bin/df",
-               arguments: ["-h"],
-               timeout: 10),
-        Action(command: "/whoami",
-               description: "Current user",
-               executable: "/usr/bin/whoami",
-               arguments: [],
-               timeout: 10),
-        Action(command: "/ip",
-               description: "Network interfaces",
-               executable: "/sbin/ifconfig",
-               arguments: [],
-               timeout: 10),
-        Action(command: "/mem",
-               description: "Virtual memory statistics",
-               executable: "/usr/bin/vm_stat",
-               arguments: [],
-               timeout: 10),
-        Action(command: "/top",
-               description: "Top processes by CPU (one snapshot)",
-               executable: "/usr/bin/top",
-               arguments: ["-l", "1", "-n", "15", "-o", "cpu"],
-               timeout: 15),
-        Action(command: "/ps",
-               description: "Running processes",
-               executable: "/bin/ps",
-               arguments: ["aux"],
-               timeout: 10),
-        Action(command: "/netstat",
-               description: "Routing table",
-               executable: "/usr/sbin/netstat",
-               arguments: ["-rn"],
-               timeout: 10),
-        Action(command: "/battery",
-               description: "Battery and power status",
-               executable: "/usr/bin/pmset",
-               arguments: ["-g", "batt"],
-               timeout: 10),
-        Action(command: "/date",
-               description: "Current system date and time",
-               executable: "/bin/date",
-               arguments: [],
-               timeout: 10),
-    ])
+    /// The v1 seed allowlist.
+    ///
+    /// Deliberately **empty**: the app's runnable surface is now the repo-scoped git/build
+    /// commands and the multi-step `/sim` (S16–S19), resolved from operator config — not a
+    /// fixed set of read-only system diagnostics. The legacy diagnostics (`/disk`, `/ip`,
+    /// `/mem`, `/top`, `/ps`, `/netstat`, `/battery`, `/date`, and earlier `/uptime`,
+    /// `/whoami`) were removed; with none seeded, the menu shows its "No actions can run"
+    /// state until config-derived commands are wired in.
+    ///
+    /// Any future entry must remain an absolute path with a fixed argument array (invariant
+    /// I1), run as the normal user under a restricted PATH by the runner (invariant I4).
+    static let seed = ActionRegistry(actions: [])
 }

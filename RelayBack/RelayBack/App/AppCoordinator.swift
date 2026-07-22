@@ -143,6 +143,12 @@ final class AppCoordinator {
         case .armRejected:
             await reply(chatId, "❌ Invalid code.")
             record(fromId: fromId, event: .rejected(reason: "bad code"))
+        case .armPrompt:
+            // S20: `/arm` was sent without a code (e.g. tapped from the command menu). Prompt the
+            // operator to type it — `force_reply` opens the keyboard so the next message is the code.
+            // I3: the prompt is a fixed string, it carries no secret.
+            await reply(chatId, "🔐 Enter your TOTP code to arm:", forceReply: true)
+            record(fromId: fromId, event: .control("arm prompt"))
         case .disarmAccepted:
             await reply(chatId, "🔒 Disarmed.")
             record(fromId: fromId, event: .control("disarmed"))
@@ -222,9 +228,9 @@ final class AppCoordinator {
         }
     }
 
-    private func reply(_ chatId: Int64, _ text: String) async {
+    private func reply(_ chatId: Int64, _ text: String, forceReply: Bool = false) async {
         // Best-effort: a failed send must not crash update handling (the loop keeps polling).
-        try? await transport.sendMessage(chatId: chatId, text: text)
+        try? await transport.sendMessage(chatId: chatId, text: text, forceReply: forceReply)
     }
 
     private func record(fromId: Int64, event: AuditEvent) {

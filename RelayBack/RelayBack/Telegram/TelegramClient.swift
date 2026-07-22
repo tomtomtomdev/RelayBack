@@ -65,13 +65,16 @@ struct TelegramClient: TelegramTransport {
         return try TelegramUpdate.decodeBatch(from: data)
     }
 
-    func sendMessage(chatId: Int64, text: String) async throws {
+    func sendMessage(chatId: Int64, text: String, forceReply: Bool) async throws {
+        struct ForceReplyMarkup: Encodable { let forceReply: Bool }   // → {"force_reply": true}
         struct Params: Encodable {
             let chatId: Int64
             let text: String
+            let replyMarkup: ForceReplyMarkup?                        // omitted when nil
         }
+        let markup = forceReply ? ForceReplyMarkup(forceReply: true) : nil
         _ = try await perform(jsonRequest(method: "sendMessage",
-                                          body: Params(chatId: chatId, text: text)))
+                                          body: Params(chatId: chatId, text: text, replyMarkup: markup)))
     }
 
     func setMyCommands(_ commands: [BotCommand]) async throws {

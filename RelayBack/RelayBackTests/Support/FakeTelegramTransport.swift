@@ -26,7 +26,7 @@ final class FakeTelegramTransport: TelegramTransport {
 
     /// The offset requested on each `getUpdates` call — proves updates are never reprocessed (FR-1).
     private(set) var getUpdatesOffsets: [Int64] = []
-    private(set) var sentMessages: [(chatId: Int64, text: String)] = []
+    private(set) var sentMessages: [(chatId: Int64, text: String, forceReply: Bool)] = []
     private(set) var sentDocuments: [(chatId: Int64, filename: String, data: Data)] = []
     private(set) var registeredCommands: [BotCommand] = []
 
@@ -51,8 +51,8 @@ final class FakeTelegramTransport: TelegramTransport {
         return []
     }
 
-    func sendMessage(chatId: Int64, text: String) async throws {
-        sentMessages.append((chatId, text))
+    func sendMessage(chatId: Int64, text: String, forceReply: Bool) async throws {
+        sentMessages.append((chatId, text, forceReply))
     }
 
     func sendDocument(chatId: Int64, filename: String, data: Data) async throws {

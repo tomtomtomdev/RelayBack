@@ -25,7 +25,7 @@ struct AuthGuardTests {
     private func makeGuard(_ clock: RelayBack.Clock) -> AuthGuard {
         AuthGuard(allowlist: [allowed],
                   totpSecret: secret,
-                  registry: .seed,
+                  registry: ActionRegistry(actions: [disk]),
                   clock: clock,
                   idleTimeout: idleTimeout)
     }
@@ -33,7 +33,16 @@ struct AuthGuardTests {
     /// A currently-valid code for `date`, produced by the same TOTP oracle the guard validates against.
     private func goodCode(at date: Date) -> String { TOTP.code(secret: secret, at: date) }
 
-    private var uptime: Action { ActionRegistry.seed.match("/uptime")! }
+    // The runnable-action fixture. The seed allowlist is now empty (legacy diagnostics removed),
+    // so the guard under test is built with a registry containing just this action; `/disk`
+    // selects it while armed (I1) and is blocked while disarmed / from a stranger (I2).
+    private var disk: Action {
+        Action(command: "/disk",
+               description: "Disk usage, human-readable",
+               executable: "/bin/df",
+               arguments: ["-h"],
+               timeout: 10)
+    }
 
     // MARK: - Identity gate (I2 / FR-2)
 
@@ -42,7 +51,7 @@ struct AuthGuardTests {
         var guardState = makeGuard(clock)
         // Even a valid control command or a valid TOTP code from a stranger is dropped,
         // and must never arm the session.
-        #expect(guardState.authorize(fromId: stranger, text: "/uptime") == .rejectedUnknownUser)
+        #expect(guardState.authorize(fromId: stranger, text: "/disk") == .rejectedUnknownUser)
         #expect(guardState.authorize(fromId: stranger, text: "/arm \(goodCode(at: clock.now))") == .rejectedUnknownUser)
         #expect(guardState.authorize(fromId: stranger, text: "/status") == .rejectedUnknownUser)
         #expect(guardState.isArmed == false)
@@ -52,7 +61,7 @@ struct AuthGuardTests {
 
     @Test func disarmedBlocksActions() {
         var guardState = makeGuard(TestClock(start))
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .disarmed)
     }
 
     // MARK: - Agent action `/claude` gating (S21 — §4b / I5)
@@ -192,12 +201,55 @@ struct AuthGuardTests {
         let bad = goodCode(at: clock.now) == "000000" ? "111111" : "000000"
         #expect(guardState.authorize(fromId: allowed, text: "/arm \(bad)") == .control(.armRejected))
         #expect(guardState.isArmed == false)
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .disarmed)
     }
 
-    @Test func armWithNoCodeRejected() {
+    // S20 — `/arm` with no code (e.g. tapped from the Telegram command menu) does not reject
+    // outright; it prompts the operator to type the code and stays disarmed until one arrives.
+    @Test func armWithNoCodePromptsForCode() {
         var guardState = makeGuard(TestClock(start))
-        #expect(guardState.authorize(fromId: allowed, text: "/arm") == .control(.armRejected))
+        #expect(guardState.authorize(fromId: allowed, text: "/arm") == .control(.armPrompt))
+        #expect(guardState.isArmed == false)
+    }
+
+    // After the prompt, the operator's next (bare, non-command) message is consumed as the code.
+    @Test func codeAfterPromptArmsTheSession() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/arm") == .control(.armPrompt))
+        #expect(guardState.authorize(fromId: allowed, text: goodCode(at: clock.now)) == .control(.armAccepted))
+        #expect(guardState.isArmed == true)
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .runAction(disk))
+    }
+
+    // A bad code supplied after the prompt is rejected and leaves the session disarmed.
+    @Test func badCodeAfterPromptStaysDisarmed() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        let bad = goodCode(at: clock.now) == "000000" ? "111111" : "000000"
+        #expect(guardState.authorize(fromId: allowed, text: "/arm") == .control(.armPrompt))
+        #expect(guardState.authorize(fromId: allowed, text: bad) == .control(.armRejected))
+        #expect(guardState.isArmed == false)
+    }
+
+    // A bare code is ONLY treated as an arm code right after a prompt — otherwise it is unknown,
+    // so an idle numeric message can never silently arm the session (I2).
+    @Test func bareCodeWithoutPromptIsNotAnArmCode() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        #expect(guardState.authorize(fromId: allowed, text: goodCode(at: clock.now)) == .unknownCommand)
+        #expect(guardState.isArmed == false)
+    }
+
+    // Typing a new command instead of the code cancels the pending prompt: the command is handled
+    // normally, and the awaited-code state is cleared (a later bare code no longer arms).
+    @Test func commandAfterPromptCancelsAwaitingCode() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/arm") == .control(.armPrompt))
+        #expect(guardState.authorize(fromId: allowed, text: "/status") == .control(.status(isArmed: false)))
+        // The prompt was cancelled by the command — a subsequent bare code is no longer consumed.
+        #expect(guardState.authorize(fromId: allowed, text: goodCode(at: clock.now)) == .unknownCommand)
         #expect(guardState.isArmed == false)
     }
 
@@ -206,7 +258,7 @@ struct AuthGuardTests {
         var guardState = makeGuard(clock)
         #expect(guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))") == .control(.armAccepted))
         #expect(guardState.isArmed == true)
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .runAction(uptime))
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .runAction(disk))
     }
 
     // MARK: - Idle expiry & timer reset (FR-3)
@@ -217,7 +269,7 @@ struct AuthGuardTests {
         _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
         clock.advance(by: idleTimeout + 1)
         #expect(guardState.isArmed == false)
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .disarmed)
     }
 
     @Test func actionResetsIdleTimer() {
@@ -225,10 +277,10 @@ struct AuthGuardTests {
         var guardState = makeGuard(clock)
         _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
         clock.advance(by: 200)   // 200s < 300s window: still armed
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .runAction(uptime))
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .runAction(disk))
         clock.advance(by: 200)   // 400s since arm, but only 200s since the action reset the timer
         // Without the reset this would have expired at 300s; with it, the session is still armed.
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .runAction(uptime))
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .runAction(disk))
     }
 
     @Test func remainingArmedTimeReflectsClockAndClamps() {
@@ -251,7 +303,7 @@ struct AuthGuardTests {
         _ = guardState.authorize(fromId: allowed, text: "/arm \(goodCode(at: clock.now))")
         #expect(guardState.authorize(fromId: allowed, text: "/disarm") == .control(.disarmAccepted))
         #expect(guardState.isArmed == false)
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .disarmed)
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .disarmed)
     }
 
     // MARK: - Status never executes
@@ -302,7 +354,7 @@ struct AuthGuardTests {
 
         guardState.updateAllowlist([allowed, 222])   // editing identity must not drop a live session
         #expect(guardState.isArmed)
-        #expect(guardState.authorize(fromId: allowed, text: "/uptime") == .runAction(uptime))
+        #expect(guardState.authorize(fromId: allowed, text: "/disk") == .runAction(disk))
     }
 
     // MARK: - Casing

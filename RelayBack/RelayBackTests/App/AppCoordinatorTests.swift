@@ -8,7 +8,7 @@
 //      other decision (unknown user, disarmed, bad code, unknown command) leaves the runner
 //      untouched (`runCount == 0`).
 //    • I1 — the runner only ever receives a registry-defined `Action`; operator text merely
-//      selects it (proven by the recorded action equalling the seeded `/uptime`).
+//      selects it (proven by the recorded action equalling the seeded `/disk`).
 //    • I3 — the audit entry for a run carries only the command token + exit code, never output.
 //  It also pins the FR-6 reply shaping: normal output → formatted text, oversized → a document.
 //
@@ -47,7 +47,7 @@ struct AppCoordinatorTests {
         let audit = InMemoryAuditSink()
         let authGuard = AuthGuard(allowlist: [allowed],
                                   totpSecret: secret,
-                                  registry: .seed,
+                                  registry: ActionRegistry(actions: [disk]),
                                   clock: clock,
                                   idleTimeout: idleTimeout)
         let coordinator = AppCoordinator(authGuard: authGuard,
@@ -66,17 +66,25 @@ struct AppCoordinatorTests {
 
     private func goodCode(at date: Date) -> String { TOTP.code(secret: secret, at: date) }
 
-    private var uptime: Action { ActionRegistry.seed.match("/uptime")! }
+    // The runnable-action fixture. The seed allowlist is now empty (legacy diagnostics removed),
+    // so the harness injects a registry containing just this action; `/disk` selects it (I1).
+    private var disk: Action {
+        Action(command: "/disk",
+               description: "Disk usage, human-readable",
+               executable: "/bin/df",
+               arguments: ["-h"],
+               timeout: 10)
+    }
 
     // MARK: - Authorized + armed action runs and replies with formatted output
 
     @Test func armedAuthorizedActionRunsAndRepliesFormatted() async {
         let h = makeHarness()
         await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
         // I1/I2: exactly one process, and it is the registry action selected by the token.
-        #expect(h.runner.runActions == [uptime])
+        #expect(h.runner.runActions == [disk])
 
         // FR-6: the formatted result is what OutputFormatter produces, sent as text to the chat.
         let expected = OutputFormatter.format(CommandResult(exitCode: 0, stdout: "up 3 days", stderr: ""))
@@ -85,7 +93,7 @@ struct AppCoordinatorTests {
         #expect(expected.count == 1)   // small output → one text message
 
         // I3: the run is audited by command token + exit code only — never the output.
-        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/uptime", exitCode: 0) })
+        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/disk", exitCode: 0) })
         #expect(h.audit.entries.allSatisfy { !$0.line.contains("up 3 days") })
     }
 
@@ -93,7 +101,7 @@ struct AppCoordinatorTests {
 
     @Test func unknownUserDroppedNothingRunNoReply() async {
         let h = makeHarness()
-        await h.coordinator.handle(update(fromId: stranger, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: stranger, text: "/disk"))
 
         #expect(h.runner.runCount == 0)                 // I2: no spawn for a stranger
         #expect(h.transport.sentMessages.isEmpty)       // FR-2: strangers get no reply at all
@@ -105,7 +113,7 @@ struct AppCoordinatorTests {
 
     @Test func disarmedActionRepliesAndDoesNotRun() async {
         let h = makeHarness()
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
         #expect(h.runner.runCount == 0)                 // I2: armed session required to run
         #expect(h.transport.sentMessages.count == 1)
@@ -119,7 +127,7 @@ struct AppCoordinatorTests {
         let h = makeHarness()
         let bad = goodCode(at: h.clock.now) == "000000" ? "111111" : "000000"
         await h.coordinator.handle(update(fromId: allowed, text: "/arm \(bad)"))
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
         #expect(h.runner.runCount == 0)                 // still disarmed after a bad code
         #expect(h.audit.entries.map(\.event) == [.rejected(reason: "bad code"), .rejected(reason: "disarmed")])
@@ -135,13 +143,38 @@ struct AppCoordinatorTests {
         #expect(h.runner.runCount == 0)                 // arming never runs an action
     }
 
+    // MARK: - /arm with no code prompts for it via force_reply, then arms on the reply (S20)
+
+    @Test func armWithNoCodePromptsWithForceReplyAndDoesNotRun() async {
+        let h = makeHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm"))
+
+        #expect(h.runner.runCount == 0)                          // nothing spawned by a prompt
+        #expect(h.transport.sentMessages.count == 1)
+        let prompt = h.transport.sentMessages.first
+        #expect(prompt?.forceReply == true)                      // opens the keyboard to type the code
+        #expect(prompt?.text.contains("code") == true)
+        #expect(h.coordinator.isArmed == false)                  // still disarmed until a code arrives
+        #expect(h.audit.entries.map(\.event) == [.control("arm prompt")])
+    }
+
+    @Test func codeReplyAfterPromptArmsTheSession() async {
+        let h = makeHarness()
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm"))
+        await h.coordinator.handle(update(fromId: allowed, text: goodCode(at: h.clock.now)))
+
+        #expect(h.coordinator.isArmed == true)
+        #expect(h.transport.sentMessages.last?.text.lowercased().contains("armed") == true)
+        #expect(h.audit.entries.map(\.event) == [.control("arm prompt"), .control("armed")])
+    }
+
     // MARK: - Oversized output → a single document (FR-6)
 
     @Test func oversizedOutputSentAsDocument() async {
         let big = String(repeating: "x", count: OutputFormatter.documentThreshold + 1)
         let h = makeHarness(result: CommandResult(exitCode: 0, stdout: big, stderr: ""))
         await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
         #expect(h.transport.sentDocuments.count == 1)
         #expect(h.transport.sentDocuments.first?.filename == "output.txt")
@@ -190,15 +223,15 @@ struct AppCoordinatorTests {
         let newcomer: Int64 = 222
 
         // Before wiring: the newcomer is dropped and nothing runs (I2).
-        await h.coordinator.handle(update(fromId: newcomer, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: newcomer, text: "/disk"))
         #expect(h.runner.runCount == 0)
 
         h.coordinator.updateAllowlist([allowed, newcomer])
         await h.coordinator.handle(update(fromId: newcomer, text: "/arm \(goodCode(at: h.clock.now))"))
-        await h.coordinator.handle(update(fromId: newcomer, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: newcomer, text: "/disk"))
 
         // The newly-authorized id armed and ran exactly the registry action (I1/I2).
-        #expect(h.runner.runActions == [uptime])
+        #expect(h.runner.runActions == [disk])
     }
 
     @Test func updateAllowlistRevokesARemovedId() async {
@@ -206,7 +239,7 @@ struct AppCoordinatorTests {
         await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
 
         h.coordinator.updateAllowlist([])   // remove everyone
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
         #expect(h.runner.runCount == 0)     // I2: a removed id can no longer run, even mid-session
     }
@@ -221,7 +254,7 @@ struct AppCoordinatorTests {
         h.coordinator.disarm()                          // the popover's "Disarm now" target
         #expect(h.coordinator.isArmed == false)
 
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
         #expect(h.runner.runCount == 0)                 // I2: disarmed by the UI → nothing runs
     }
 
@@ -231,9 +264,9 @@ struct AppCoordinatorTests {
         h.coordinator.onActionCompleted = { received = ($0, $1) }
 
         await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
-        await h.coordinator.handle(update(fromId: allowed, text: "/uptime"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/disk"))
 
-        #expect(received?.command == "/uptime")
+        #expect(received?.command == "/disk")
         #expect(received?.result == CommandResult(exitCode: 0, stdout: "up 3 days", stderr: ""))
     }
 
@@ -242,7 +275,7 @@ struct AppCoordinatorTests {
     @Test func updateWithoutMessageOrSenderOrTextIsIgnored() async {
         let h = makeHarness()
         await h.coordinator.handle(TelegramUpdate(updateId: 1, message: nil))              // no message
-        await h.coordinator.handle(update(fromId: nil, text: "/uptime"))                    // no sender (channel post)
+        await h.coordinator.handle(update(fromId: nil, text: "/disk"))                    // no sender (channel post)
         await h.coordinator.handle(update(fromId: allowed, text: nil))                      // no text
 
         #expect(h.runner.runCount == 0)

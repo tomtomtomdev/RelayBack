@@ -56,8 +56,10 @@ includes: tests green, refactor pass done, `PROGRESS.md` updated.
 
 ### S2 — Action allowlist & registry *(pure)*
 - **Goal:** `Action` (command, description, executable absolute path, args, timeout) and
-  `ActionRegistry.match(_ text:) -> Action?` (exact leading-token match). A small seed set
-  (`/uptime`, `/disk`, `/whoami`).
+  `ActionRegistry.match(_ text:) -> Action?` (exact leading-token match). The `seed` allowlist
+  is now empty (the legacy diagnostics were removed post-S19; the runnable surface is the
+  repo-scoped git/build/sim commands) — `match()` semantics are exercised against a local test
+  fixture, not the seed.
 - **Tests first:** exact match; unknown → nil; leading-slash + casing rules; control
   commands (`/arm` etc.) are NOT actions.
 - **Done when:** match tests green.

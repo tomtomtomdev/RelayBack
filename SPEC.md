@@ -186,6 +186,9 @@ partially-edited state — acceptable for v1; streaming + `/kill` is deferred (�
 
 Control commands (handled internally, always available to allowlisted users):
 - `/arm <6-digit-code>` — validate TOTP, arm session, reply with remaining armed time.
+  Sending `/arm` **without** a code (e.g. tapping it from the Telegram command menu) does not
+  reject; it replies with a `force_reply` prompt and the operator's next message is consumed as
+  the code (S20). A new command instead of a code cancels the prompt.
 - `/disarm` — drop to DISARMED.
 - `/status` — report armed/disarmed + remaining time (no action execution).
 - `/help` or `/start` — list available action commands.
@@ -193,9 +196,12 @@ Control commands (handled internally, always available to allowlisted users):
 - `/cd <name>` — select the active repo for subsequent git/build/sim commands (S16).
 - `/pwd` — report the active repo (name + root), or prompt to `/cd` first (S16).
 
-Action commands: each registry `Action` exposes a `command` (e.g. `/uptime`). Sending it,
-while armed and authorized, runs the action. Registered via Telegram `setMyCommands` so
-they autocomplete in chat. Unknown commands → polite "unknown command" reply, logged.
+Action commands: each registry `Action` exposes a `command`. Sending it, while armed and
+authorized, runs the action. Registered via Telegram `setMyCommands` so they autocomplete in
+chat. Unknown commands → polite "unknown command" reply, logged. *(The v1 `seed` allowlist is
+currently empty — the legacy read-only diagnostics were removed; the runnable surface is the
+repo-scoped git/build/sim commands of §4a. The action mechanism above still stands for any
+future or config-derived entry.)*
 
 Dev-workflow commands (§4a, run in the active repo; require `/cd` first):
 - `/gitstatus` · `/branch` · `/checkout <branch>` · `/pull` · `/push` · `/commit <msg>` — git

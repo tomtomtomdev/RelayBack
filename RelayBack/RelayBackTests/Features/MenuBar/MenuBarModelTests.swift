@@ -17,12 +17,23 @@ struct MenuBarModelTests {
         let model = MenuBarModel()
         let expected = ActionRegistry.seed.actions.map { ActionSummary($0) }
 
+        // The popover mirrors the seed registry. That registry is now empty (the legacy
+        // diagnostics were removed), so the armed popover shows its "No actions can run" state.
         #expect(model.actions == expected)
-        #expect(model.actions.map(\.command) == ["/uptime", "/disk", "/whoami", "/ip",
-                                                  "/mem", "/top", "/ps", "/netstat", "/battery", "/date"])
-        // I1 at the UI edge: a summary exposes only the command + description — no executable,
+        #expect(model.actions.isEmpty)
+    }
+
+    @Test func summaryExposesOnlyCommandAndDescription() {
+        // I1 at the UI edge: a summary carries only the command + description — no executable,
         // arguments, or timeout that the popover could turn into a spawn.
-        #expect(model.actions.first?.description == ActionRegistry.seed.actions.first?.description)
+        let action = Action(command: "/disk",
+                            description: "Disk usage, human-readable",
+                            executable: "/bin/df",
+                            arguments: ["-h"],
+                            timeout: 10)
+        let summary = ActionSummary(action)
+        #expect(summary.command == "/disk")
+        #expect(summary.description == "Disk usage, human-readable")
     }
 
     @Test func lastResultDefaultsToNil() {
