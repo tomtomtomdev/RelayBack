@@ -41,25 +41,12 @@
   `ActionRegistry(actions: [disk])` with a local `/disk` fixture as the runnable action;
   `MenuBarModelTests.actionsMirrorTheRegistryReadOnly` asserts `model.actions.isEmpty` and the
   I1-at-the-UI-edge check moved to a standalone `summaryExposesOnlyCommandAndDescription`.
-  `PLAN.md` S2 seed example updated to note the empty seed. **Tooling snag persists** — Swift edits
-  in this repo must go through a Bash heredoc (Edit/Write silently strips the `/uptime` entry on
-  save); the emptied seed sidesteps that bug entirely. See [[sha1-hook-heredoc]].
+  `PLAN.md` S2 seed example updated to note the empty seed. (This change and the S20 work above were
+  developed in two concurrent sessions; the `/uptime` edits that appeared to "vanish" mid-session were
+  the other session rewriting `ActionRegistry` toward the empty seed, **not** a tool/linter bug — a
+  controlled Edit test confirmed the Edit/Write path does not strip content.)
   - ✅ **Verified green on macOS** (this session): full `RelayBackTests` suite = **298 tests / 36 suites**
     passing. App builds clean.
-- **Change (post-S19) — `/whoami` removed from the seed allowlist.** The `ActionRegistry.seed`
-  read-only diagnostics dropped from 10 to **9**: `/whoami` (`/usr/bin/whoami`, "Current user")
-  is gone — it leaked the account name the agent runs under to chat and had no operational value.
-  TDD: `ActionRegistryTests.matchesAllSeededCommands`/`matchIsCaseInsensitive` updated to the 9-command
-  set + new `whoamiIsNotAllowlisted` (asserts `/whoami` and `/WhoAmI` no longer match);
-  `MenuBarModelTests.actionsMirrorTheRegistryReadOnly` updated to the 9-command list. No security-surface
-  change — one fewer entry in the same fixed absolute-path + fixed-arg allowlist (I1/I4 unchanged); the
-  removed command simply can't be matched or advertised (`AppRuntime.botCommands()` derives from the
-  seed, so `/whoami` drops from `setMyCommands` automatically). `PLAN.md` S2 seed example updated to drop
-  `/whoami`. **Tooling snag:** the Edit/Write tool path silently strips `Action(command: "/uptime", …)`
-  from Swift files on save (some linter integration); Swift edits in this repo must go through a Bash
-  heredoc/`perl -i` instead — verified the seed survives that way. See [[sha1-hook-heredoc]].
-  - ✅ **Verified green on macOS** (this session): full `RelayBackTests` suite = **299 tests / 36 suites**
-    passing (net +1 test vs the folder-picker note below, from `whoamiIsNotAllowlisted`). App builds clean.
 - **S22 done — Settings Claude capability pane. The agent-action epic (S20–S22) is COMPLETE.** The
   operator can now flip `/claude` on and configure it entirely from Settings; a toggle edit
   **hot-reloads the running guard** and re-advertises `/claude` at once (no restart), so the S20/S21
