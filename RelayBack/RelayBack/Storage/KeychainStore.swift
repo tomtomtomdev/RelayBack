@@ -26,6 +26,7 @@ struct KeychainStore: SecretStore {
     private enum Account {
         static let botToken = "botToken"
         static let totpSecret = "totpSecret"
+        static let pgyerApiKey = "pgyerApiKey"
     }
 
     init(service: String = "com.RelayBack") {
@@ -49,6 +50,15 @@ struct KeychainStore: SecretStore {
 
     func setTOTPSecret(_ secret: Data?) throws {
         try write(secret, account: Account.totpSecret)
+    }
+
+    func pgyerApiKey() throws -> String? {
+        guard let data = try read(account: Account.pgyerApiKey) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func setPgyerApiKey(_ key: String?) throws {
+        try write(key?.data(using: .utf8), account: Account.pgyerApiKey)
     }
 
     // MARK: - Keychain plumbing

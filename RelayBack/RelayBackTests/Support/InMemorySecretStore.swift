@@ -14,10 +14,12 @@ import Foundation
 final class InMemorySecretStore: SecretStore {
     private var storedBotToken: String?
     private var storedTOTPSecret: Data?
+    private var storedPgyerApiKey: String?
 
-    init(botToken: String? = nil, totpSecret: Data? = nil) {
+    init(botToken: String? = nil, totpSecret: Data? = nil, pgyerApiKey: String? = nil) {
         storedBotToken = botToken
         storedTOTPSecret = totpSecret
+        storedPgyerApiKey = pgyerApiKey
     }
 
     func botToken() throws -> String? { storedBotToken }
@@ -25,4 +27,7 @@ final class InMemorySecretStore: SecretStore {
 
     func totpSecret() throws -> Data? { storedTOTPSecret }
     func setTOTPSecret(_ secret: Data?) throws { storedTOTPSecret = secret }
+
+    func pgyerApiKey() throws -> String? { storedPgyerApiKey }
+    func setPgyerApiKey(_ key: String?) throws { storedPgyerApiKey = key }
 }

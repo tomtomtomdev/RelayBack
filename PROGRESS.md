@@ -5,6 +5,76 @@
 
 ## Current state
 
+- **S27 done — persistence foundation for `/release` + `/pgyer` (secret + config + repo-config fields).**
+  The first code slice of the PGYER epic (S26–S30). No user-facing behavior yet — it lays the storage
+  seams the S28 builder / S29 coordinator will consume. TDD, all pure/thin-I/O. New pieces:
+  - **`SecretStore.pgyerApiKey()`/`setPgyerApiKey(_:)`** — the **third Keychain-only secret** (I3),
+    mirroring the `botToken` `String?` shape exactly. `KeychainStore` gains a distinct account
+    `"pgyerApiKey"` (compile-only per policy — no test writes the real Keychain); behavior is pinned
+    against `InMemorySecretStore` (round-trip / missing→nil / overwrite / nil-deletes /
+    three-secret-independence). `PreviewSecretStore` updated. I3-by-construction: the key only ever
+    flows through the `SecretStore` seam; `ConfigStore` has no method that could hold it.
+  - **`ConfigStore.pgyerUploadURL()`/`setPgyerUploadURL(_:)`** — the non-secret endpoint URL.
+    **Fails closed to the default** `https://www.pgyer.com/apiv2/app/upload`. The default + the
+    blank→default fallback are centralized in a `ConfigStore` **protocol extension**
+    (`defaultPgyerUploadURL` + `resolvedPgyerUploadURL(_:)`) so all three impls
+    (`UserDefaultsConfigStore` / `InMemoryConfigStore` / `PreviewConfigStore`) share one source of
+    truth and behave identically. Stored in `UserDefaults` under `"pgyerUploadURL"`.
+  - **`RepoConfig` gained four optional fields** — `workspace`, `exportOptionsPlist`, `uploadArtifact`,
+    `pgyerDescription` — all `String?`, defaulted in the memberwise init so every existing call site
+    compiles unchanged. **Codable-backward-compatible:** synthesized `decodeIfPresent` means a repo
+    blob persisted before S27 (no new keys) still decodes with the new fields nil, so a version upgrade
+    never wipes the operator's persisted repo allowlist (§4a JSON in UserDefaults). New
+    `RelayBackTests/Core/RepoConfigTests.swift` pins the round-trip + old/minimal-blob decodes.
+  - **Decisions locked:**
+    - *Blank→default fail-closed* was implemented beyond the literal PLAN ("URL default + round-trip"):
+      SPEC §4c says the URL "fails closed to it," so a stored empty/whitespace value must not become the
+      upload target. Pinned by `blankPgyerUploadURLFailsClosedToTheDefault`.
+    - The default-URL constant lives on the `ConfigStore` protocol (extension), not duplicated per impl.
+    - **I3 scope for this slice:** S27 only establishes the Keychain-only *storage* seam; the key does
+      not yet flow anywhere. The deeper egress invariant tests (key never in argv/`ps`/audit/reply) land
+      in **S28** (plan is secret-free) and **S29** (coordinator writes the 0600 `curl --config` file),
+      per the epic scope-guard. Nothing to spawn here, so nothing to assert about spawning yet.
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **` (app + test targets),
+    then full `RelayBackTests` = **359 tests / 39 suites** passing (exit 0) via `test-without-building`
+    after `pkill -9 -f RelayBack.app` — **no test-host flake this run**. +11 tests / +1 suite: 4
+    `SecretStoreTests` (pgyer missing/round-trip/overwrite/delete) + the 2→3-secret independence rename;
+    4 `ConfigStoreTests` (missing-default / round-trip / blank-fail-closed / real-UserDefaults isolated
+    smoke); 3 new `RepoConfigTests`. **Next slice: S28** (pure `Core/ReleaseCommand` config→steps builder).
+- **S26 done — docs-only: scoped the `/release` + `/pgyer` PGYER-upload epic (SPEC §4c).** New epic
+  **S26–S30** (planned this session, approved plan at `~/.claude/plans/humble-purring-kitten.md`):
+  build an iOS archive → export `.ipa` → upload to PGYER, plus a standalone `/pgyer` upload. This is a
+  **deliberate threat-model change** — the first action that sends data **off the Mac to a third
+  party**, and the first **stored third-party secret** (the PGYER API key) — so per the guardrails the
+  SPEC was amended *before* any code. Docs touched this slice:
+  - **SPEC.md** — §2 network non-goal annotated (outbound is no longer *only* long-polling); **control
+    5** + **I3** extended to name the PGYER key as Keychain-only *and* argv-free (passed via a 0600
+    `curl --config` file, so it never reaches `ps`); new **§4c "Release & distribution"** (controls:
+    all argv from config, key in Keychain fails-closed, fixed per-repo output layout, `/sim`-style
+    stop-on-first-failure, reused hygiene + secret-free audit; threat-model note widening worst-case to
+    "upload the configured artifact to the configured PGYER account"); **§5** grammar (`/release`,
+    `/pgyer`); **FR-12**; **§7** (`ReleaseCommand` in Core, `CurlConfigWriting` in Execution +
+    component responsibilities); **§10** note.
+  - **PLAN.md** — new "Release & distribution (S26–S30)" section (why, decisions-locked, scope guard,
+    the five slices + done-criteria), mirroring the S20–S22 agent-action section's shape.
+  - **CLAUDE.md** — I3 bullet extended for the PGYER key; a new guardrail bounding off-box egress to
+    what §4c scopes (no new destination / operator URL / second third-party secret without a SPEC
+    amendment; any such secret goes in Keychain, never `ConfigStore`).
+  - **Decisions locked (from the approved plan):** `/release` pipeline **+** standalone `/pgyer`; key
+    via 0600 `curl --config` file (stdin ruled out — `ProcessSpawner` doesn't wire child stdin);
+    endpoint URL in `ConfigStore` (default `https://www.pgyer.com/apiv2/app/upload`); `-sdk iphoneos
+    -configuration Release` fixed; build note = per-repo `pgyerDescription` (no operator free-text).
+  - **Architecture decision:** `/release` follows the **`SimulatorCommand` multi-step-builder** pattern
+    (not `/build`'s `configArgs`) — archive/export/upload each place a config value *after* a fixed verb
+    (`archive -archivePath …`, `curl … <url>`), which `RepoConfigArg` (all config-args-before-fixed-args)
+    can't express. The **secret never enters `Core`/the guard/the `Decision`** — only the coordinator
+    reads it (at the upload step), writes the 0600 file, spawns curl, deletes it.
+  - **Docs-only — no code/test change** (suite unchanged; mirrors the `d481271`/`59b2021` docs-first
+    precedent). Not build/test-verified because nothing compilable changed. **Next slice: S27** (secret
+    + config + `RepoConfig` fields, TDD).
+  - **Note:** `/build` and `/sim` are currently *unwired* in production (post-S24 change below) though
+    their mechanisms remain; S30 will decide whether `/release`/`/pgyer` are advertised by default or
+    left injectable-but-inert like those. The mechanism (S27–S29) lands regardless.
 - **S25 done — `/cd` offers a tappable repo picker instead of failing on a missing name.** Sending
   a bare `/cd` (e.g. tapping it from the command menu) used to reply `⚠️ usage: /cd <repo>`; it now
   offers the configured repos as a **one-time Telegram tap keyboard** (button per repo), and the

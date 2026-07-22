@@ -27,6 +27,21 @@ struct RepoConfig: Equatable, Codable, Identifiable {
     /// Fixed simulator device for `/sim` (S19); nil when unconfigured.
     let simulatorDevice: String?
 
+    // Release & distribution config (§4c / S28). All optional and defaulted so every existing call
+    // site compiles unchanged, and Codable-backward-compatible: a blob persisted before S27 (with
+    // none of these keys) still decodes, with each field nil — synthesized `decodeIfPresent`. Never
+    // derived from operator text; a repo missing any required field is refused at build time.
+
+    /// Fixed `xcodebuild -workspace` value for `/release` archive/export (§4c); nil for a repo with
+    /// no release config.
+    let workspace: String?
+    /// Fixed `xcodebuild -exportOptionsPlist` value for `/release` export (§4c); nil when unconfigured.
+    let exportOptionsPlist: String?
+    /// The produced artifact (`.ipa`/`.dmg`) uploaded by `/release`/`/pgyer` (§4c); nil when unconfigured.
+    let uploadArtifact: String?
+    /// Per-repo PGYER build note (the upload's description field, §4c) — no operator free-text; nil when unset.
+    let pgyerDescription: String?
+
     /// Stable identity for SwiftUI lists — the name is unique within the allowlist.
     var id: String { name }
 
@@ -34,11 +49,19 @@ struct RepoConfig: Equatable, Codable, Identifiable {
          root: String,
          scheme: String? = nil,
          destination: String? = nil,
-         simulatorDevice: String? = nil) {
+         simulatorDevice: String? = nil,
+         workspace: String? = nil,
+         exportOptionsPlist: String? = nil,
+         uploadArtifact: String? = nil,
+         pgyerDescription: String? = nil) {
         self.name = name
         self.root = root
         self.scheme = scheme
         self.destination = destination
         self.simulatorDevice = simulatorDevice
+        self.workspace = workspace
+        self.exportOptionsPlist = exportOptionsPlist
+        self.uploadArtifact = uploadArtifact
+        self.pgyerDescription = pgyerDescription
     }
 }

@@ -879,11 +879,14 @@ private struct SecondaryButtonStyle: ButtonStyle {
 private final class PreviewSecretStore: SecretStore {
     private var token: String?
     private var secret: Data?
+    private var pgyerKey: String?
     init(botToken: String? = nil, totpSecret: Data? = nil) { token = botToken; secret = totpSecret }
     func botToken() throws -> String? { token }
     func setBotToken(_ token: String?) throws { self.token = token }
     func totpSecret() throws -> Data? { secret }
     func setTOTPSecret(_ secret: Data?) throws { self.secret = secret }
+    func pgyerApiKey() throws -> String? { pgyerKey }
+    func setPgyerApiKey(_ key: String?) throws { pgyerKey = key }
 }
 
 /// A throwaway in-memory `ConfigStore` so the Settings previews render a populated allowlist / repos /
@@ -893,6 +896,7 @@ private final class PreviewConfigStore: ConfigStore {
     private var repoConfigs: [RepoConfig]
     private var claudeIsEnabled: Bool
     private var claudeProfileValue: ClaudeProfile
+    private var pgyerURL: String?
     init(allowlist: [Int64] = [], repos: [RepoConfig] = [],
          claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default) {
         ids = allowlist; repoConfigs = repos
@@ -906,6 +910,8 @@ private final class PreviewConfigStore: ConfigStore {
     func setClaudeEnabled(_ enabled: Bool) { claudeIsEnabled = enabled }
     func claudeProfile() -> ClaudeProfile { claudeProfileValue }
     func setClaudeProfile(_ profile: ClaudeProfile) { claudeProfileValue = profile }
+    func pgyerUploadURL() -> String { Self.resolvedPgyerUploadURL(pgyerURL) }
+    func setPgyerUploadURL(_ url: String) { pgyerURL = url }
 }
 
 /// A throwaway `AuditReading` so the Audit-pane preview renders a representative, color-coded table.

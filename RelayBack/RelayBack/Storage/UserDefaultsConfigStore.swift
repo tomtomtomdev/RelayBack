@@ -19,6 +19,7 @@ struct UserDefaultsConfigStore: ConfigStore {
     private let reposKey = "repos"
     private let claudeEnabledKey = "claudeEnabled"
     private let claudeProfileKey = "claudeProfile"
+    private let pgyerUploadURLKey = "pgyerUploadURL"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -65,5 +66,16 @@ struct UserDefaultsConfigStore: ConfigStore {
     func setClaudeProfile(_ profile: ClaudeProfile) {
         guard let data = try? JSONEncoder().encode(profile) else { return }
         defaults.set(data, forKey: claudeProfileKey)
+    }
+
+    // Release & distribution (§4c / S27). The endpoint URL is non-secret; a missing or blank stored
+    // value fails closed to the default PGYER endpoint (`resolvedPgyerUploadURL`). The API key is
+    // NOT stored here — it is a Keychain secret (`SecretStore.pgyerApiKey`, I3).
+    func pgyerUploadURL() -> String {
+        Self.resolvedPgyerUploadURL(defaults.string(forKey: pgyerUploadURLKey))
+    }
+
+    func setPgyerUploadURL(_ url: String) {
+        defaults.set(url, forKey: pgyerUploadURLKey)
     }
 }

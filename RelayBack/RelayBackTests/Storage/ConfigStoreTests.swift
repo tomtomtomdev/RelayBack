@@ -115,6 +115,40 @@ struct ConfigStoreTests {
         #expect(store.claudeProfile() == profile)
     }
 
+    // MARK: - PGYER upload URL (§4c / S27)
+
+    @Test func missingPgyerUploadURLIsTheDefaultEndpoint() {
+        // Fails closed to the known PGYER endpoint — the upload can only ever target that unless
+        // the operator deliberately changes it (§4c). Not a secret; the key lives in SecretStore.
+        #expect(InMemoryConfigStore().pgyerUploadURL() == "https://www.pgyer.com/apiv2/app/upload")
+    }
+
+    @Test func pgyerUploadURLRoundTrips() {
+        let store = InMemoryConfigStore()
+        store.setPgyerUploadURL("https://example.test/api/upload")
+        #expect(store.pgyerUploadURL() == "https://example.test/api/upload")
+    }
+
+    @Test func blankPgyerUploadURLFailsClosedToTheDefault() {
+        // A stored empty/whitespace value must not become the target — fail closed to the default.
+        let store = InMemoryConfigStore()
+        store.setPgyerUploadURL("   ")
+        #expect(store.pgyerUploadURL() == "https://www.pgyer.com/apiv2/app/upload")
+    }
+
+    // Real impl, isolated suite — the URL round-trips and a fresh store reads the default.
+    @Test func userDefaultsStoreRoundTripsPgyerUploadURLInIsolatedSuite() throws {
+        let suite = "com.RelayBack.tests.config.pgyer"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = UserDefaultsConfigStore(defaults: defaults)
+        #expect(store.pgyerUploadURL() == "https://www.pgyer.com/apiv2/app/upload")
+        store.setPgyerUploadURL("https://example.test/api/upload")
+        #expect(store.pgyerUploadURL() == "https://example.test/api/upload")
+    }
+
     // Real impl, isolated suite — the toggle and the (JSON-encoded) profile round-trip.
     @Test func userDefaultsStoreRoundTripsClaudeConfigInIsolatedSuite() throws {
         let suite = "com.RelayBack.tests.config.claude"

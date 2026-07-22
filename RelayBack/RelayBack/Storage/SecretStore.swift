@@ -26,4 +26,12 @@ protocol SecretStore {
     func totpSecret() throws -> Data?
     /// Store the TOTP secret, or clear it by passing `nil`.
     func setTOTPSecret(_ secret: Data?) throws
+
+    /// The PGYER API key used by the release/distribution upload (§4c), or `nil` if none is stored.
+    /// The third Keychain-only secret (invariant I3): read only at the `/release`/`/pgyer` upload
+    /// step, then written into a 0600 `curl --config` file so it never reaches argv/`ps`; never
+    /// logged, never in the audit log, never sent to Telegram. A missing key fails closed.
+    func pgyerApiKey() throws -> String?
+    /// Store the PGYER API key, or clear it by passing `nil`.
+    func setPgyerApiKey(_ key: String?) throws
 }

@@ -41,4 +41,30 @@ protocol ConfigStore {
     func claudeProfile() -> ClaudeProfile
     /// Persist the Claude Code profile, replacing any previous value.
     func setClaudeProfile(_ profile: ClaudeProfile)
+
+    // MARK: - Release & distribution (§4c / S27)
+
+    /// The PGYER upload endpoint URL (non-secret). **Fails closed to `defaultPgyerUploadURL`**: a
+    /// missing or blank value reads back as the known PGYER endpoint, so the release upload can only
+    /// ever target that unless the operator deliberately changes it. The API key is a Keychain
+    /// secret (`SecretStore.pgyerApiKey`) — never stored here (I3).
+    func pgyerUploadURL() -> String
+    /// Persist the PGYER upload endpoint URL, replacing any previous value.
+    func setPgyerUploadURL(_ url: String)
+}
+
+extension ConfigStore {
+    /// The default PGYER upload endpoint. `pgyerUploadURL()` fails closed to this when nothing is
+    /// stored (§4c). Not a secret. Kept here so every `ConfigStore` impl shares one source of truth.
+    static var defaultPgyerUploadURL: String { "https://www.pgyer.com/apiv2/app/upload" }
+
+    /// Resolve a stored URL string to the fail-closed default when it is absent or blank, so the
+    /// fake and the real store behave identically (§4c). A stored blank value never becomes the
+    /// upload target.
+    static func resolvedPgyerUploadURL(_ stored: String?) -> String {
+        guard let stored, !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return defaultPgyerUploadURL
+        }
+        return stored
+    }
 }

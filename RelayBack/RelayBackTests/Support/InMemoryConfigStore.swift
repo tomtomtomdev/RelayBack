@@ -16,13 +16,16 @@ final class InMemoryConfigStore: ConfigStore {
     private var repoConfigs: [RepoConfig]
     private var claudeIsEnabled: Bool
     private var claudeProfileValue: ClaudeProfile
+    private var pgyerURL: String?
 
     init(allowlist: [Int64] = [], repos: [RepoConfig] = [],
-         claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default) {
+         claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default,
+         pgyerUploadURL: String? = nil) {
         ids = allowlist
         repoConfigs = repos
         claudeIsEnabled = claudeEnabled
         claudeProfileValue = claudeProfile
+        pgyerURL = pgyerUploadURL
     }
 
     func allowlist() -> [Int64] { ids }
@@ -35,4 +38,7 @@ final class InMemoryConfigStore: ConfigStore {
     func setClaudeEnabled(_ enabled: Bool) { claudeIsEnabled = enabled }
     func claudeProfile() -> ClaudeProfile { claudeProfileValue }
     func setClaudeProfile(_ profile: ClaudeProfile) { claudeProfileValue = profile }
+
+    func pgyerUploadURL() -> String { Self.resolvedPgyerUploadURL(pgyerURL) }
+    func setPgyerUploadURL(_ url: String) { pgyerURL = url }
 }

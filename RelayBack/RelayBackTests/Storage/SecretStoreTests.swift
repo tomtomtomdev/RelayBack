@@ -62,15 +62,43 @@ struct SecretStoreTests {
         #expect(try store.totpSecret() == nil)
     }
 
+    // MARK: - PGYER API key (§4c / S27) — the third Keychain-only secret (I3)
+
+    @Test func missingPgyerApiKeyReadsAsNil() throws {
+        #expect(try InMemorySecretStore().pgyerApiKey() == nil)
+    }
+
+    @Test func pgyerApiKeyRoundTrips() throws {
+        let store = InMemorySecretStore()
+        try store.setPgyerApiKey("pgyer-key-abc123")
+        #expect(try store.pgyerApiKey() == "pgyer-key-abc123")
+    }
+
+    @Test func overwritingPgyerApiKeyKeepsTheLatestValue() throws {
+        let store = InMemorySecretStore()
+        try store.setPgyerApiKey("first")
+        try store.setPgyerApiKey("second")
+        #expect(try store.pgyerApiKey() == "second")
+    }
+
+    @Test func settingPgyerApiKeyToNilDeletesIt() throws {
+        let store = InMemorySecretStore()
+        try store.setPgyerApiKey("to-be-cleared")
+        try store.setPgyerApiKey(nil)
+        #expect(try store.pgyerApiKey() == nil)
+    }
+
     // MARK: - Independence
 
-    @Test func theTwoSecretsAreStoredIndependently() throws {
+    @Test func theThreeSecretsAreStoredIndependently() throws {
         let store = InMemorySecretStore()
         try store.setBotToken("tok")
         try store.setTOTPSecret(Data([0x10, 0x20]))
-        // Clearing one must not disturb the other.
+        try store.setPgyerApiKey("pgyer")
+        // Clearing one must not disturb the others.
         try store.setBotToken(nil)
         #expect(try store.botToken() == nil)
         #expect(try store.totpSecret() == Data([0x10, 0x20]))
+        #expect(try store.pgyerApiKey() == "pgyer")
     }
 }

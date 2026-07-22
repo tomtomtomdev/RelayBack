@@ -491,6 +491,101 @@ only I5 is added — I1–I4 unchanged.
 
 ---
 
+## Release & distribution (S26–S30) — `/release` + `/pgyer` (PGYER upload) *(added 2026-07-22)*
+
+**Why added:** the operator wants to build an iOS archive, export an `.ipa`, and ship it to PGYER
+from Telegram. This is a deliberate threat-model change (SPEC §4c): the **first action that sends
+data off the Mac to a third party**, and the first **stored third-party secret** (the PGYER API
+key). It stays inside I1 (no shell — every argv value is config/Keychain, never chat) and reuses the
+`/sim` multi-step contract, S7 runner hygiene, S16 active-repo scoping, S4 output, S9 audit.
+
+**Decisions locked:** a multi-step `/release` (archive → export → upload, stop-on-first-failure) plus
+a standalone `/pgyer` (upload the configured artifact only, for `.ipa`/`.dmg` without a rebuild); the
+PGYER key lives in the Keychain (`SecretStore`) and is passed via a **0600 `curl --config` file**, so
+it never appears in argv/`ps`/audit/reply; the endpoint URL is non-secret config (`ConfigStore`,
+default `https://www.pgyer.com/apiv2/app/upload`); `-sdk iphoneos -configuration Release` fixed in
+code; the build note is a per-repo configured `pgyerDescription` (no operator free-text). Missing
+key/field **fails closed** — nothing spawns.
+
+**Scope guard:** no change to I1/I2/I4; I3 is extended to name the PGYER key (Keychain-only, argv-free
+via `--config`) and §4c adds the egress threat-model note. The secret never enters `Core`, the guard,
+or the `Decision` — only the coordinator holds it, at spawn time. Every slice adds an invariant test
+that the key never reaches an argv slot, the audit line, or a reply.
+
+### S26 — SPEC/PLAN/CLAUDE amendment *(docs only)*
+- **Goal:** scope §4c before code (this slice). SPEC §2 egress annotation, extended I3 + control 5,
+  new §4c, §5 grammar (`/release`/`/pgyer`), FR-12, §7 types (`ReleaseCommand`, `CurlConfigWriting`),
+  §10 note; this PLAN section; CLAUDE.md I3 bullet + a third-party-egress guardrail.
+- **Done when:** docs are internally consistent; no code/test change (suite count unchanged).
+
+### S27 — Secret + config + repo-config fields *(TDD)*
+- **Goal:** the persistence foundation.
+  - `SecretStore.pgyerApiKey()`/`setPgyerApiKey(_:)` (+ `KeychainStore` account, `InMemorySecretStore`).
+  - `ConfigStore.pgyerUploadURL()`/`setPgyerUploadURL(_:)` (default the pgyer endpoint, fails closed to
+    it; + `UserDefaultsConfigStore`, `InMemoryConfigStore`, `PreviewConfigStore`).
+  - `RepoConfig` optional `workspace`, `exportOptionsPlist`, `uploadArtifact`, `pgyerDescription`
+    (Codable-backward-compatible; defaulted init params keep all call sites compiling).
+- **Tests first (RED):** key round-trip/missing→nil/overwrite; URL default + round-trip; repo-config
+  JSON round-trip incl. old blobs decoding with the new fields nil.
+- **Done when:** foundation tests green; nothing user-facing yet.
+- ✅ **Done** — 359 tests / 39 suites green. `SecretStore.pgyerApiKey()`/`setPgyerApiKey` (Keychain
+  account `"pgyerApiKey"`, third I3 secret; `InMemorySecretStore`/`PreviewSecretStore` updated);
+  `ConfigStore.pgyerUploadURL()`/`setPgyerUploadURL` failing closed to the default endpoint, with the
+  default + blank→default fallback centralized in a `ConfigStore` protocol extension
+  (`defaultPgyerUploadURL` / `resolvedPgyerUploadURL`, shared by all three impls); `RepoConfig` gained
+  optional `workspace`/`exportOptionsPlist`/`uploadArtifact`/`pgyerDescription` (defaulted init params,
+  Codable-backward-compatible so pre-S27 blobs decode with them nil). **Deviation:** implemented a
+  blank→default fail-closed (SPEC §4c "fails closed to it"), beyond the literal "default + round-trip".
+  Key-egress invariant tests deferred to S28/S29 where the key actually flows. See PROGRESS decisions.
+
+### S28 — Pure `Core/ReleaseCommand` *(TDD)*
+- **Goal:** the config→steps builder, secret-free.
+  - `ReleaseCommandSpec` (token + description), `PgyerUpload` (artifact/url/note) + pure
+    `configFileBody(apiKey:)`, `ReleasePlan` (`buildSteps: [Action]` + `upload`),
+    `ReleaseCommand.plan(for:uploadURL:)` (+ a `/pgyer`-only upload builder).
+  - Archive/export are fixed `/usr/bin/xcodebuild` Actions from config, derived `build/` dir; fail
+    closed on any missing field.
+- **Tests first (RED):** exact archive/export argv from config; every step in repo root (I1);
+  each missing-field rejection; `configFileBody` carries key + form fields; **plan is secret-free**
+  (no key in `buildSteps`/`upload` — the I3-at-the-builder check).
+- **Done when:** builder tests green; not yet routable.
+
+### S29 — Guard routing + coordinator run *(TDD)*
+- **Goal:** route `/release`/`/pgyer` and run them.
+  - `AuthGuard`: `Decision.runRelease`/`.runPgyerUpload`, injected `releaseCommand` +
+    `pgyerUploadURL`; `resolveRelease`/`resolvePgyer` gate order = arm (I2) → active repo → no
+    operator arg → build (mirrors `resolveSimulator`).
+  - `AppCoordinator`: injected PGYER-key provider + `CurlConfigWriting` seam; `runRelease` runs the
+    build steps via `runStep` (stop on non-zero), then reads the key (missing → refuse, fail closed),
+    writes the 0600 config file, spawns `/usr/bin/curl --config <path> <url>`, deletes the file.
+- **Tests first (RED):** full 3-step pipeline in order + secret-free audit each; stops on
+  archive/export failure (no upload); missing key → refused, no curl spawn, secret-free audit;
+  disarmed / no-repo → refused, nothing spawns (I2); reply + audit never contain the key (I3).
+- **Done when:** guard + coordinator scenario tests green; end-to-end with fakes proves §4c.
+
+### S30 — Settings UI + AppRuntime wiring
+- **Goal:** make it configurable + reachable.
+  - `SettingsModel`/`SettingsView`: a `SecureField` for the PGYER key (via `SecretStore`) + an
+    upload-URL field (via `ConfigStore`, pre-filled with the default); Repos add-form gains
+    `workspace`/`exportOptionsPlist`/`uploadArtifact` (picked via the existing `FolderPicking`
+    `chooseFile()` seam) + a typed `pgyerDescription`.
+  - `AppRuntime`: inject `ReleaseCommand.spec` + `pgyerUploadURL()` into the guard, the key provider +
+    curl-config writer into the coordinator, advertise `/release`/`/pgyer`, hot-reload on Settings
+    changes (mirrors `onReposChanged`).
+- **Tests first (RED):** view-model — key persist via `SecretStore`, URL persist+default, new repo
+  fields round-trip through `addRepo`. Thin views Preview-verified.
+- **Done when:** pane usable in a Preview; view-model tests green; `/release` reaches the live guard.
+  **Manual smoke (not in CI):** set key/URL + a repo, `/arm`→`/cd`→`/release`; confirm archive→export
+  →upload, stop-on-failure, missing-key refusal, and a secret-free audit log.
+
+**S26–S30 done when:** with a PGYER key + a fully-configured repo, an armed operator can `/cd` then
+`/release` to archive/export/upload (or `/pgyer` to upload only); the key never leaves the Keychain
+except into a 0600 `--config` file at spawn time (never argv/audit/reply, proven by an invariant
+test); output returns via the existing formatter; the run is audited secret-free; the suite is green;
+I1/I2/I4 unchanged and I3 holds for the new secret.
+
+---
+
 ## Definition of done (whole project, v1)
 
 All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended
