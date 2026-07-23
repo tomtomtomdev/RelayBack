@@ -91,6 +91,48 @@ struct ConfigStoreTests {
         #expect(store.repos() == repos)
     }
 
+    // MARK: - Scripts (S32 — the §4d operator-picked local-script allowlist)
+
+    @Test func missingScriptsIsEmpty() {
+        // Fails closed like the repo allowlist — an absent config yields no runnable scripts (I1).
+        #expect(InMemoryConfigStore().scripts() == [])
+    }
+
+    @Test func scriptsRoundTrip() {
+        let store = InMemoryConfigStore()
+        let scripts = [
+            ScriptConfig(label: "Deploy", path: "/Users/op/bin/deploy.sh",
+                         workingDirectory: "/Users/op/dev/app", timeout: 120),
+            ScriptConfig(label: "Backup", path: "/Users/op/bin/backup.sh"),
+        ]
+        store.setScripts(scripts)
+        #expect(store.scripts() == scripts)
+    }
+
+    @Test func setScriptsOverwritesLastWins() {
+        let store = InMemoryConfigStore(scripts: [ScriptConfig(label: "a", path: "/a.sh")])
+        store.setScripts([ScriptConfig(label: "b", path: "/b.sh")])
+        #expect(store.scripts() == [ScriptConfig(label: "b", path: "/b.sh")])
+    }
+
+    // Real impl, isolated suite — scripts persist as JSON and round-trip (incl. optional fields).
+    @Test func userDefaultsStoreRoundTripsScriptsInIsolatedSuite() throws {
+        let suite = "com.RelayBack.tests.config.scripts"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let store = UserDefaultsConfigStore(defaults: defaults)
+        #expect(store.scripts() == [])
+        let scripts = [
+            ScriptConfig(label: "Deploy", path: "/Users/op/bin/deploy.sh",
+                         workingDirectory: "/Users/op/dev/app", timeout: 120),
+            ScriptConfig(label: "Backup", path: "/Users/op/bin/backup.sh"),
+        ]
+        store.setScripts(scripts)
+        #expect(store.scripts() == scripts)
+    }
+
     // MARK: - Claude agent config (§4b / S20)
 
     @Test func missingClaudeEnabledIsFalse() {

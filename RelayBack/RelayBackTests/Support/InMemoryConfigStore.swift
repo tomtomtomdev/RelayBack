@@ -14,15 +14,17 @@ import Foundation
 final class InMemoryConfigStore: ConfigStore {
     private var ids: [Int64]
     private var repoConfigs: [RepoConfig]
+    private var scriptConfigs: [ScriptConfig]
     private var claudeIsEnabled: Bool
     private var claudeProfileValue: ClaudeProfile
     private var pgyerURL: String?
 
-    init(allowlist: [Int64] = [], repos: [RepoConfig] = [],
+    init(allowlist: [Int64] = [], repos: [RepoConfig] = [], scripts: [ScriptConfig] = [],
          claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default,
          pgyerUploadURL: String? = nil) {
         ids = allowlist
         repoConfigs = repos
+        scriptConfigs = scripts
         claudeIsEnabled = claudeEnabled
         claudeProfileValue = claudeProfile
         pgyerURL = pgyerUploadURL
@@ -33,6 +35,9 @@ final class InMemoryConfigStore: ConfigStore {
 
     func repos() -> [RepoConfig] { repoConfigs }
     func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
+
+    func scripts() -> [ScriptConfig] { scriptConfigs }
+    func setScripts(_ scripts: [ScriptConfig]) { scriptConfigs = scripts }
 
     func claudeEnabled() -> Bool { claudeIsEnabled }
     func setClaudeEnabled(_ enabled: Bool) { claudeIsEnabled = enabled }

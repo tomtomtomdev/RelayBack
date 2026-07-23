@@ -27,6 +27,13 @@ protocol ConfigStore {
     func repos() -> [RepoConfig]
     /// Persist the repo allowlist, replacing any previous value.
     func setRepos(_ repos: [RepoConfig])
+    /// The persisted local-script allowlist (§4d operator-picked scripts, S32); empty if none is
+    /// stored. Fails closed like the repo allowlist: a missing / unreadable value reads back as
+    /// empty, so an absent config yields no runnable scripts (I1) — it can only ever narrow the
+    /// runnable surface, never widen it.
+    func scripts() -> [ScriptConfig]
+    /// Persist the local-script allowlist, replacing any previous value.
+    func setScripts(_ scripts: [ScriptConfig])
 
     // MARK: - Claude agent action (§4b / S20)
 

@@ -5,6 +5,45 @@
 
 ## Current state
 
+- **S32 done — `Core/ScriptConfig` + `ConfigStore.scripts()` persistence (secret-free).** The first
+  *code* slice of the configurable-local-scripts epic (S31–S34). Lays the storage seam the S33 `/run`
+  router + S34 Settings pane will consume; no user-facing behavior yet. TDD, all pure/thin-I/O. New pieces:
+  - **`Core/ScriptConfig`** (Codable, Equatable, Identifiable) — one entry in the operator-picked
+    local-script allowlist (§4d): `label`, `path`, optional `workingDirectory`, `timeout`
+    (`defaultTimeout` = 300s). A **custom `init(from:)`** decodes a minimal/old blob (`label`+`path`
+    only) with `workingDirectory` nil + `timeout` defaulted, so persisted JSON stays forward/backward-
+    compatible (a version upgrade never wipes the allowlist — mirrors `RepoConfig`'s tolerance).
+    `id = label` (unique within the allowlist).
+  - **`ScriptConfig.toAction() -> Action?`** — the pure config→registry-`Action` map. **I1 by
+    construction:** `executable` = the script's own **absolute `path`** (run via its shebang by execve —
+    never `/bin/sh -c`), `arguments` = **[]** (no operator text, no shell), `workingDirectory` = the
+    configured cwd, `timeout` passed through. `command` = `"/" + slug(label)` (lowercase, alphanumeric
+    runs hyphen-joined), `description` = the trimmed label. **Fails closed (nil)** on a non-absolute or
+    empty `path`, so a bad entry is never runnable — chat never supplies a path/arg/content; it only
+    *selects* among configured scripts (S33).
+  - **`ConfigStore.scripts()`/`setScripts(_:)`** — the non-secret script allowlist, **JSON in
+    `UserDefaults`** (key `"scripts"`), **fails closed to `[]`** on a missing/undecodable blob (mirrors
+    `repos()`; an absent config can only ever *narrow* the runnable surface, never widen it — I1). Added
+    to the protocol + all three impls (`UserDefaultsConfigStore` / `InMemoryConfigStore` /
+    `PreviewConfigStore`; the two fakes gained a `scripts:` init param defaulted to `[]`).
+  - **Decisions locked:**
+    - *Command token = slug of the label.* `"Deploy Staging"` → `/deploy-staging` (used for the audit
+      line + the `$ /cmd` output framing); `description` is the human label. Selection in S33 is by
+      **label** (the `/run` picker), so the slug is an internal display/audit token, not what the
+      operator types.
+    - *Blank/punctuation-only label fails closed too* — beyond the literal PLAN "relative/empty path"
+      check. A label that slugs to nothing would yield a degenerate `"/"` command token; refusing it is
+      the same I1 fail-closed spirit. Pinned by `blankLabelFailsClosed`.
+    - *No new invariant.* A configured script is an ordinary registry `Action` under I1–I4; nothing here
+      spawns anything yet, so there is no argv/audit assertion to make until S33 wires `/run`.
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **`, then full
+    `RelayBackTests` = **386 tests / 41 suites** passing via `test-without-building` after
+    `pkill -9 -f RelayBack.app` (no test-host flake this run). +12 tests / +1 suite: 8 `ScriptConfigTests`
+    (JSON round-trip, minimal-blob-decodes-with-defaults, valid→absolute-executable+empty-argv+slug/
+    description, no-cwd inherits, relative/tilde/empty-path fail-closed, blank/punctuation-label
+    fail-closed) + 4 `ConfigStoreTests` (missing→`[]`, round-trip, overwrite-last-wins, isolated-suite
+    UserDefaults smoke). **Next slice: S33** (`/run` trigger + seed-`ActionRegistry`-from-config +
+    hot-reload via `AuthGuard.updateActions` + a `.keyboard` picker when several).
 - **S31 done — docs-only: scoped the `/run` configurable-local-scripts epic (SPEC §4d).** New epic
   **S31–S34** (planned this session): let the Mac operator **pick local script files** in Settings
   that Telegram `/run` can trigger. Approved shape: **(a)** an allowlist of picked scripts with a

@@ -17,6 +17,7 @@ struct UserDefaultsConfigStore: ConfigStore {
     private let defaults: UserDefaults
     private let key = "allowlist"
     private let reposKey = "repos"
+    private let scriptsKey = "scripts"
     private let claudeEnabledKey = "claudeEnabled"
     private let claudeProfileKey = "claudeProfile"
     private let pgyerUploadURLKey = "pgyerUploadURL"
@@ -44,6 +45,19 @@ struct UserDefaultsConfigStore: ConfigStore {
     func setRepos(_ repos: [RepoConfig]) {
         guard let data = try? JSONEncoder().encode(repos) else { return }
         defaults.set(data, forKey: reposKey)
+    }
+
+    // Scripts carry optional fields, so they are stored as JSON like repos. Fails closed: a missing
+    // or undecodable blob reads back as empty (§4d / S32) — no runnable scripts (I1).
+    func scripts() -> [ScriptConfig] {
+        guard let data = defaults.data(forKey: scriptsKey),
+              let scripts = try? JSONDecoder().decode([ScriptConfig].self, from: data) else { return [] }
+        return scripts
+    }
+
+    func setScripts(_ scripts: [ScriptConfig]) {
+        guard let data = try? JSONEncoder().encode(scripts) else { return }
+        defaults.set(data, forKey: scriptsKey)
     }
 
     // Claude config (§4b / S20). Enabled is a plain Bool — absent reads back `false` (fails closed,

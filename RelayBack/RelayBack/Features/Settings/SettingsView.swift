@@ -894,18 +894,21 @@ private final class PreviewSecretStore: SecretStore {
 private final class PreviewConfigStore: ConfigStore {
     private var ids: [Int64]
     private var repoConfigs: [RepoConfig]
+    private var scriptConfigs: [ScriptConfig]
     private var claudeIsEnabled: Bool
     private var claudeProfileValue: ClaudeProfile
     private var pgyerURL: String?
-    init(allowlist: [Int64] = [], repos: [RepoConfig] = [],
+    init(allowlist: [Int64] = [], repos: [RepoConfig] = [], scripts: [ScriptConfig] = [],
          claudeEnabled: Bool = false, claudeProfile: ClaudeProfile = .default) {
-        ids = allowlist; repoConfigs = repos
+        ids = allowlist; repoConfigs = repos; scriptConfigs = scripts
         claudeIsEnabled = claudeEnabled; claudeProfileValue = claudeProfile
     }
     func allowlist() -> [Int64] { ids }
     func setAllowlist(_ ids: [Int64]) { self.ids = ids }
     func repos() -> [RepoConfig] { repoConfigs }
     func setRepos(_ repos: [RepoConfig]) { repoConfigs = repos }
+    func scripts() -> [ScriptConfig] { scriptConfigs }
+    func setScripts(_ scripts: [ScriptConfig]) { scriptConfigs = scripts }
     func claudeEnabled() -> Bool { claudeIsEnabled }
     func setClaudeEnabled(_ enabled: Bool) { claudeIsEnabled = enabled }
     func claudeProfile() -> ClaudeProfile { claudeProfileValue }

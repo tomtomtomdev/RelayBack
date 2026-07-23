@@ -636,6 +636,18 @@ refused. Runs as normal user under the restricted PATH (I4).
   to the expected absolute executable + empty argv; **rejects a relative/empty path** (the I1
   fail-closed check); config round-trips + fails closed to `[]`.
 - **Done when:** foundation tests green; nothing user-facing yet.
+- ✅ **Done** — 386 tests / 41 suites green (+12 / +1). `Core/ScriptConfig` (Codable): `label`/`path`/
+  optional `workingDirectory`/`timeout` (default 300s), with a custom `init(from:)` so a minimal blob
+  (`label`+`path` only) decodes with the optionals defaulted (forward/backward-compatible, mirrors
+  `RepoConfig`). Pure `toAction() -> Action?`: executable = the script's own absolute `path`, **empty
+  argv** (execve via shebang, I1 — no `/bin/sh -c`), cwd = `workingDirectory`; command token = `"/" +
+  slug(label)`, description = the (trimmed) label. **Fails closed (nil)** on a non-absolute/empty path
+  *and* a label that slugs to nothing (would yield a degenerate `/` token). `ConfigStore.scripts()/
+  setScripts()` — JSON in `UserDefaults` (key `"scripts"`), fails closed to `[]`; added to the protocol
+  + `UserDefaultsConfigStore` + `InMemoryConfigStore` + `PreviewConfigStore`. **Deviation:** added a
+  blank/punctuation-only-label fail-closed guard beyond the literal "relative/empty path" check (same
+  I1 spirit — an unrunnable degenerate token). Not routable yet (registry seed / `/run` / hot-reload =
+  S33). See PROGRESS.
 
 ### S33 — `/run` trigger + seed-from-config + hot-reload *(TDD)*
 - **Goal:** route `/run` and make the registry operator-configured.
