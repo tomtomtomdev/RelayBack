@@ -255,6 +255,131 @@ struct SettingsModelTests {
         #expect(model.repos.isEmpty)
     }
 
+    // MARK: - Scripts (§4d — the operator-picked local-script allowlist, S34)
+
+    @Test func loadsScriptsFromConfigStore() {
+        let scripts = [ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh")]
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(scripts: scripts))
+        #expect(model.scripts == scripts)
+    }
+
+    @Test func addScriptPersistsAndNotifies() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: [ScriptConfig]?
+        model.onScriptsChanged = { notified = $0 }
+
+        #expect(model.addScript(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh"))
+        let expected = [ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh")]
+        #expect(config.scripts() == expected)     // persisted for next launch
+        #expect(notified == expected)             // pushed to the running guard (hot-reload)
+        #expect(model.scriptError == nil)
+    }
+
+    @Test func removeScriptPersistsAndNotifies() {
+        let scripts = [ScriptConfig(label: "a", path: "/a.sh"), ScriptConfig(label: "b", path: "/b.sh")]
+        let config = InMemoryConfigStore(scripts: scripts)
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notified: [ScriptConfig]?
+        model.onScriptsChanged = { notified = $0 }
+
+        model.removeScript(label: "a")
+        #expect(config.scripts() == [ScriptConfig(label: "b", path: "/b.sh")])
+        #expect(notified == [ScriptConfig(label: "b", path: "/b.sh")])
+    }
+
+    @Test func addScriptRejectsDuplicateLabelWithoutPersistingOrNotifying() {
+        let config = InMemoryConfigStore(scripts: [ScriptConfig(label: "deploy", path: "/x.sh")])
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        var notifyCount = 0
+        model.onScriptsChanged = { _ in notifyCount += 1 }
+
+        #expect(model.addScript(label: "deploy", path: "/y.sh") == false)
+        #expect(model.scriptError != nil)
+        #expect(notifyCount == 0)                 // no change → no persist, no hot-reload
+        #expect(config.scripts() == [ScriptConfig(label: "deploy", path: "/x.sh")])   // unchanged
+    }
+
+    @Test func addScriptRejectsMissingLabelOrPath() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        #expect(model.addScript(label: "   ", path: "/x.sh") == false)
+        #expect(model.addScript(label: "x", path: "  ") == false)
+        #expect(model.scripts.isEmpty)
+        #expect(model.scriptError != nil)
+    }
+
+    @Test func addScriptRejectsANonAbsolutePath() {
+        // Fails closed at the Settings edge too: a relative path would map to nil in
+        // ScriptConfig.toAction() (never runnable), so it is refused rather than silently stored (§4d / I1).
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        #expect(model.addScript(label: "deploy", path: "relative/deploy.sh") == false)
+        #expect(model.scripts.isEmpty)
+        #expect(model.scriptError != nil)
+    }
+
+    // MARK: - Add-script form: file/folder choosers + draft (S34)
+
+    @Test func chooseScriptFileFillsPathAndSuggestsLabelFromFilename() {
+        let picker = FakeFolderPicker(fileToReturn: "/Users/op/bin/deploy-staging.sh")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.chooseScriptFile()
+        #expect(picker.chooseFileCount == 1)
+        #expect(model.newScriptPath == "/Users/op/bin/deploy-staging.sh")
+        #expect(model.newScriptLabel == "deploy-staging")   // suggested from the file name (no extension)
+    }
+
+    @Test func chooseScriptFileDoesNotOverwriteATypedLabel() {
+        let picker = FakeFolderPicker(fileToReturn: "/Users/op/bin/deploy.sh")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.newScriptLabel = "My Deploy"
+        model.chooseScriptFile()
+        #expect(model.newScriptPath == "/Users/op/bin/deploy.sh")
+        #expect(model.newScriptLabel == "My Deploy")        // operator's label is kept
+    }
+
+    @Test func cancellingTheScriptFileChooserLeavesTheDraftUnchanged() {
+        let picker = FakeFolderPicker(fileToReturn: nil)   // operator cancelled
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.newScriptLabel = "keep"
+        model.chooseScriptFile()
+        #expect(picker.chooseFileCount == 1)
+        #expect(model.newScriptPath == "")
+        #expect(model.newScriptLabel == "keep")
+    }
+
+    @Test func chooseScriptWorkingDirectoryFillsItFromTheFolderBrowser() {
+        let picker = FakeFolderPicker(pathToReturn: "/Users/op/dev/RelayBack")
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore(), folderPicker: picker)
+        model.chooseScriptWorkingDirectory()
+        #expect(picker.chooseCount == 1)
+        #expect(model.newScriptWorkingDirectory == "/Users/op/dev/RelayBack")
+    }
+
+    @Test func submitNewScriptAddsFromDraftAndClearsItOnSuccess() {
+        let config = InMemoryConfigStore()
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: config)
+        model.newScriptLabel = "Deploy Staging"
+        model.newScriptPath = "/Users/op/bin/deploy.sh"
+        model.newScriptWorkingDirectory = "/Users/op/dev/RelayBack"
+        model.newScriptTimeout = 600
+        #expect(model.submitNewScript())
+        #expect(config.scripts() == [ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh",
+                                                  workingDirectory: "/Users/op/dev/RelayBack", timeout: 600)])
+        #expect(model.newScriptLabel == "")                         // draft cleared on success
+        #expect(model.newScriptPath == "")
+        #expect(model.newScriptWorkingDirectory == "")
+        #expect(model.newScriptTimeout == ScriptConfig.defaultTimeout)
+    }
+
+    @Test func submitNewScriptKeepsDraftAndSurfacesErrorOnFailure() {
+        let model = SettingsModel(store: InMemorySecretStore(), configStore: InMemoryConfigStore())
+        model.newScriptLabel = "x"      // no file chosen → rejected
+        #expect(model.submitNewScript() == false)
+        #expect(model.newScriptLabel == "x")                        // kept so the operator can fix it
+        #expect(model.scriptError != nil)
+        #expect(model.scripts.isEmpty)
+    }
+
     // MARK: - Claude agent action (§4b / S22 — capability pane view-state)
 
     @Test func loadsClaudeConfigFromConfigStore() {

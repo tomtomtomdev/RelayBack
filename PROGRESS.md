@@ -5,6 +5,115 @@
 
 ## Current state
 
+- **S34 done — Settings "Scripts" pane + hot-reload wiring. The configurable-local-scripts epic
+  (§4d / S31–S34) is COMPLETE.** The operator can now pick local script files entirely from Settings;
+  an add/remove **hot-reloads the running guard's action registry** at once (no restart), so the
+  S32/S33 machinery is finally reachable in production. TDD, all pure view-model logic + thin
+  Preview-verified view + thin `AppRuntime` glue. New pieces:
+  - **New `SettingsPane.scripts`** ("Scripts", `scroll` icon), slotted between Repos and Claude. Its
+    `scriptsPane` (in `SettingsView`) mirrors the Repos pane: a script list (label + mono path +
+    optional `cwd:` line + **Remove**), an **ADD SCRIPT** form (name field, a **Choose Script…**
+    file-picker row, an optional **Choose Folder…** working-directory row, a 1–60 min timeout
+    stepper, **Add script**), and a `scriptError` line. A generalized `scriptChooserRow(icon:…)`
+    helper backs both picked-path rows. One Preview (two scripts, one with a cwd).
+  - **`SettingsModel` scripts state** — `scripts: [ScriptConfig]` loaded from `ConfigStore` at init;
+    `scriptError`; `onScriptsChanged`; and the add-script draft (`newScriptLabel`/`newScriptPath`/
+    `newScriptWorkingDirectory`/`newScriptTimeout`). `addScript(label:path:workingDirectory:timeout:)`
+    validates (non-empty label + **absolute** path + unique label), appends, persists via
+    `ConfigStore.setScripts`, and fires `onScriptsChanged` **only on a real change**; `removeScript`
+    same. `chooseScriptFile()` fills the path from `FolderPicking.chooseFile()` and suggests the label
+    from the file name (no extension) when unset; `chooseScriptWorkingDirectory()` uses
+    `chooseFolder()`; `submitNewScript()` commits + clears (timeout back to default) on success, keeps
+    the draft + `scriptError` on failure. Pure `static suggestedLabel(forPath:)`.
+  - **`AppRuntime` hot-reload path (parity with repos/allowlist)** — `settings.onScriptsChanged →
+    coordinator.updateActions(scripts.compactMap { $0.toAction() })`, so a script picked/removed in
+    Settings reaches the live guard's registry immediately (a removed one can no longer run — I2),
+    dropping any that fail closed on a non-absolute path (I1). No re-advertise needed: `/run` is
+    already always advertised (S33), and individual script slugs are intentionally not advertised.
+  - **Decisions locked:**
+    - *Fail closed on a non-absolute path at the Settings edge too.* A relative path would map to nil
+      in `ScriptConfig.toAction()` (never runnable), so `addScript` refuses it up front rather than
+      silently storing a dead entry (pinned by `addScriptRejectsANonAbsolutePath`). In practice the
+      file picker always yields an absolute path; the guard is defense-in-depth (§4d / I1).
+    - *No new invariant.* A configured script stays an ordinary registry `Action` under I1–I4
+      (S31/S32/S33 decision). Chat still never supplies a path/arg/content — the pane is the only
+      source of the path (picked, never typed), and `/run` only selects among the configured scripts.
+    - *Label picked, path picked — the timeout is the only typed field* (a stepper, 1–60 min), mirroring
+      the Claude-pane timeout row; working directory is optional (nil → inherit launcher cwd).
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **`, then full
+    `RelayBackTests` = **413 tests / 42 suites** passing (exit 0, `** TEST EXECUTE SUCCEEDED **`) via
+    `test-without-building` after `pkill -9 -f RelayBack.app` — no test-host flake. **+12 tests / no new
+    suite** (all `SettingsModelTests`): loads-from-store, add/remove persist+notify, duplicate/missing-
+    field/non-absolute-path rejections (no persist, no notify), file-chooser fills+suggests-label /
+    doesn't-clobber-typed / cancel-is-a-no-op, working-dir chooser fills, `submitNewScript`
+    clears-on-success / keeps-on-failure. `SettingsPaneTests` updated for the new `.scripts` case
+    (order/title/icon). App builds clean. **The §4d epic (S31–S34) is complete** — an operator can pick
+    a local script, `/arm`, and trigger it via `/run` (directly or from the picker); the whole path is
+    wired and hot-reloading. **Next: no pending slice** in the configurable-scripts epic; the S30
+    (`/release`/`/pgyer` Settings UI + `AppRuntime` wiring) slice from the PGYER epic remains open.
+- **S33 done — `/run` trigger + registry-seeded-from-scripts + hot-reload + label picker.** The
+  configurable-local-scripts epic (§4d) is now routable: an armed operator triggers their picked local
+  scripts from Telegram via `/run`. TDD, all pure/`AuthGuard`/coordinator logic; `AppRuntime` is thin
+  wiring. New pieces:
+  - **`AuthGuard` `/run` routing** — new hardcoded token case → `resolveRun()`, gate order mirrors the
+    other repo-scoped commands: **arm (I2) first**, then by configured-script count: **0** →
+    `.invalidParameters("no scripts configured")` (fails closed); **1** → `.runAction(theScript)`
+    directly; **several** → `.control(.scriptMenu([Action]))` + `awaitingScriptChoice`, so the next
+    bare (non-command) message — a tapped label — is consumed by `selectScript(labeled:)` (exact
+    `Action.description` match → `.runAction`, else `.invalidParameters("unknown script")`). This is a
+    faithful copy of the S25 `/cd` picker shape (`awaitingRepoName`/`selectRepo`), including
+    command-cancels-the-picker and bare-word-only-right-after-the-picker (I2-style guard). **I1:** any
+    operator text after `/run` is **ignored** — it never becomes an argument or the executable
+    (`trailingChatTextAfterRunIsNeverAnArgument` proves `/run rm -rf / ; echo pwned` still resolves to
+    the exact configured action with empty argv). `awaitingScriptChoice` clears on consume, on a new
+    command, on `updateActions`, and in `disarm()`.
+  - **`AuthGuard.registry` → `var` + `updateActions(_ [Action])`** — hot-reload seam mirroring
+    `updateAllowlist`/`updateRepos`: a script picked/removed in Settings reaches the live guard at once
+    (a removed one can no longer run — I2); arm state preserved; a pending picker is dropped (no stale
+    label selects a just-removed script). `ControlResult.scriptMenu([Action])` added.
+  - **`AppCoordinator.updateActions` passthrough** + `.scriptMenu` handling → sends
+    `ScriptListPresentation.selectPrompt` with a `.keyboard(pickerButtons(actions))` reply markup and a
+    secret-free `.control("run prompt")` audit line. A single-script `/run` and a picked label both
+    flow through the existing `.runAction` → `runStep` path, so the `$ /cmd` framing + audit use the
+    script's **slug** command token (`/deploy-staging`) and exit code only — **never the path** (I3).
+  - **Pure `Core/ScriptListPresentation`** — `selectPrompt` + `pickerButtons([Action]) =
+    actions.map(\.description)`. Disclosure rule (mirrors `RepoListPresentation`): buttons/prompt
+    expose only the operator-facing **label** (`Action.description`), never the executable path (I3,
+    asserted).
+  - **`AppRuntime` wiring** — the guard's registry is now seeded from
+    `configStore.scripts().compactMap { $0.toAction() }` (dropping fail-closed entries; the `.seed`
+    registry stays empty — scripts are the only production source of runnable actions), and `/run` is
+    always advertised via `setMyCommands` (it reports "no scripts configured" when none are picked).
+  - **Decisions locked:**
+    - *Selection by label, via the picker (or a single-script direct run) — not by typing the slug.*
+      Scripts DO land in the registry, so a slug like `/deploy-staging` is technically matchable via
+      the `default` `registry.match` path too; that's harmless (still I1 — only selects a preconfigured
+      action) and unadvertised, but the intended UX is `/run` + a tapped label. The slug remains the
+      internal display/audit token (S32 decision).
+    - *Deviation from PLAN — the picker carries `[Action]`, not `[ScriptConfig]`.* Given the
+      registry-based design (plan's own "seed the `ActionRegistry` from config" + `updateActions`), the
+      guard deals in resolved `Action`s, so `.scriptMenu([Action])` is the natural payload; buttons use
+      `Action.description` (= the label). No functional difference from `[ScriptConfig]`.
+    - *No new invariant.* A configured script is an ordinary registry `Action` under I1–I4 (S31/S32
+      decision). The `/run`-specific invariant test asserts only the `/run` token / a picked label ever
+      flows from chat — never a path, argument, or script content.
+  - **Deferred to S34 (Settings pane):** `SettingsModel.scripts` + `addScript`/`removeScript` +
+    `onScriptsChanged`, and the `AppRuntime` `settings.onScriptsChanged → coordinator.updateActions`
+    hot-reload closure (+ re-advertise). The runtime **seam** is complete and fully tested at the
+    coordinator level (`updateActionsEnablesAPreviouslyEmptyRun`); only the Settings UI that *fires* it
+    is missing, which is exactly S34's scope. Until then a script can only be seeded via a persisted
+    `ConfigStore.scripts()` blob at launch (no UI to add one yet).
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **`, then full
+    `RelayBackTests` = **401 tests / 42 suites** passing via `test-without-building` after
+    `pkill -9 -f RelayBack.app` (no test-host flake). **+15 tests / +1 suite:** 10 `AuthGuardTests`
+    (`/run` requires-armed, none→says-so, one→runs-directly, several→picker, label-after-picker-selects,
+    unknown-label-rejected, command-cancels-picker, bare-label-without-picker-unknown,
+    `updateActions` hot-reload add/remove, trailing-text-never-an-argument), 3 `AppCoordinatorTests`
+    (single-script runs+audits-by-slug, several sends the label keyboard + runs the pick + path-free
+    prompt, `updateActions` enables a previously-empty `/run`), 2 `ScriptListPresentationTests`
+    (buttons are labels-only, prompt carries no path). **Next slice: S34** (Settings "Scripts" pane +
+    `SettingsModel.scripts`/`addScript`/`removeScript`/`onScriptsChanged` + the `AppRuntime` hot-reload
+    wiring).
 - **S32 done — `Core/ScriptConfig` + `ConfigStore.scripts()` persistence (secret-free).** The first
   *code* slice of the configurable-local-scripts epic (S31–S34). Lays the storage seam the S33 `/run`
   router + S34 Settings pane will consume; no user-facing behavior yet. TDD, all pure/thin-I/O. New pieces:

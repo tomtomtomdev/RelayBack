@@ -662,6 +662,18 @@ refused. Runs as normal user under the restricted PATH (I4).
   hot-reload); `/run` offers the labels when several, runs directly when one, refuses when none;
   invariant — only the `/run` token / a picked label flows from chat, never a path or an argument.
 - **Done when:** guard + coordinator scenario tests green; end-to-end with fakes proves I1/I2 hold.
+- ✅ **Done** — 401 tests / 42 suites green (+15 / +1). `AuthGuard` gained a `/run` token case →
+  `resolveRun()` (arm gate first, then 0→`.invalidParameters("no scripts configured")` / 1→run
+  directly / several→`.control(.scriptMenu([Action]))` + `awaitingScriptChoice` → `selectScript`),
+  a faithful copy of the S25 `/cd` picker; `registry` became `var` with `updateActions(_:)`
+  (hot-reload, mirrors `updateAllowlist`/`updateRepos`); `AppCoordinator` gained an `updateActions`
+  passthrough + a `.scriptMenu` reply (a `.keyboard` of labels via the new pure
+  `Core/ScriptListPresentation`, path-free — I3); `AppRuntime` seeds the registry from
+  `configStore.scripts().compactMap { $0.toAction() }` and advertises `/run`. **Deviations:** the
+  picker carries `[Action]` (not `[ScriptConfig]`) since the registry-based design deals in resolved
+  actions; the Settings-pane hot-reload wiring (`onScriptsChanged`) is deferred to S34 (the coordinator
+  `updateActions` seam itself is done + tested). Trailing chat text after `/run` is ignored (I1);
+  selection is by label — the slug stays an internal display/audit token. See PROGRESS decisions.
 
 ### S34 — Settings "Scripts" pane + wiring
 - **Goal:** make it configurable + reachable.
@@ -675,6 +687,19 @@ refused. Runs as normal user under the restricted PATH (I4).
   Preview-verified.
 - **Done when:** pane usable in a Preview; view-model tests green; a picked script reaches the live
   guard and runs from `/run`.
+- ✅ **Done** — 413 tests / 42 suites green (+12 / no new suite). New `SettingsPane.scripts` ("Scripts",
+  `scroll`) between Repos and Claude; `scriptsPane` mirrors the Repos pane (list + Remove; ADD SCRIPT
+  form = name field + Choose Script… file picker + optional Choose Folder… cwd + 1–60 min timeout
+  stepper + Add). `SettingsModel` gained `scripts`/`scriptError`/`onScriptsChanged` + the add-script
+  draft + `addScript`/`removeScript` (validate non-empty label + **absolute** path + unique label,
+  persist + notify only on a real change) + `chooseScriptFile()` (fills path via `FolderPicking.
+  chooseFile()`, suggests label from the file name) + `chooseScriptWorkingDirectory()` +
+  `submitNewScript()` + pure `suggestedLabel(forPath:)`. `AppRuntime` wires `onScriptsChanged →
+  coordinator.updateActions(scripts.compactMap { $0.toAction() })` (hot-reload, mirrors
+  `onReposChanged`; drops fail-closed entries — I1; no re-advertise since `/run` is always advertised).
+  **Decision:** `addScript` fails closed on a non-absolute path at the Settings edge too (defense-in-
+  depth; the picker always yields absolute). No new invariant — a configured script is a registry
+  `Action` under I1–I4. See PROGRESS decisions.
 
 **S31–S34 done when:** an operator picks a local script in Settings, `/arm`s, and triggers it via
 `/run` (directly or from the picker); chat never supplies a path, argument, or script content (proven

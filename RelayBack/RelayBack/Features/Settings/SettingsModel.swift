@@ -52,6 +52,29 @@ final class SettingsModel {
     /// running `AuthGuard` (S16), mirroring `onAllowlistChanged`.
     var onReposChanged: (([RepoConfig]) -> Void)?
 
+    /// The configured local-script allowlist being edited (§4d / S34), loaded from and persisted
+    /// through the `ConfigStore`. Every change is pushed to `onScriptsChanged` so the running guard's
+    /// action registry hot-reloads (a removed script can no longer run — I2), mirroring the repos.
+    private(set) var scripts: [ScriptConfig]
+    /// A short message surfaced under the scripts section when an add is rejected (missing fields, a
+    /// non-absolute path, or a duplicate label), so a rejected script is never silently dropped.
+    private(set) var scriptError: String?
+    /// Called after every scripts change with the new list, so the composition root can hot-reload the
+    /// running `AuthGuard`'s registry (S34), mirroring `onReposChanged`.
+    var onScriptsChanged: (([ScriptConfig]) -> Void)?
+
+    // Draft fields for the "Add script" form (S34 — mirrors the add-repo draft). `newScriptPath` is
+    // filled by `chooseScriptFile()` from a native file browser rather than typed, so the script that
+    // gets registered is a real file the operator pointed at (never chat-supplied — §4d / I1).
+    /// Draft script label (the `/run` picker entry); suggested from the chosen file unless already set.
+    var newScriptLabel = ""
+    /// Draft absolute script path; set by `chooseScriptFile()` from the file browser, never typed.
+    var newScriptPath = ""
+    /// Draft working directory (optional); set by `chooseScriptWorkingDirectory()`, never typed.
+    var newScriptWorkingDirectory = ""
+    /// Draft run timeout in seconds; the runner terminates the script if it exceeds this.
+    var newScriptTimeout: TimeInterval = ScriptConfig.defaultTimeout
+
     // Draft fields for the "Add repo" form (S20 — moved here from the view so the folder-chooser
     // and name-suggestion glue is unit-testable). `newRepoRoot` is filled by `chooseRepoRoot()`
     // from a native folder browser rather than typed; `submitNewRepo()` commits and clears them.
@@ -136,6 +159,7 @@ final class SettingsModel {
         self.armingConfig = ArmingConfigPresentation(idleTimeout: idleTimeout, driftSteps: driftSteps)
         self.allowlist = AllowlistDraft(configStore.allowlist())
         self.repos = configStore.repos()
+        self.scripts = configStore.scripts()
         let claudeProfile = configStore.claudeProfile()
         self.claudeEnabled = configStore.claudeEnabled()
         self.claudePermission = claudeProfile.permission
@@ -290,6 +314,88 @@ final class SettingsModel {
     private static func trimmedOrNil(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    }
+
+    // MARK: - Scripts (§4d operator-picked local-script allowlist, S34)
+
+    /// Validates and adds a script; returns whether it was added. A script needs a non-empty label and
+    /// an **absolute** path (a relative path would map to nil in `ScriptConfig.toAction()` — never
+    /// runnable — so it fails closed here too, §4d / I1), and its label must be unique. Persists and
+    /// hot-reloads only on a real change.
+    @discardableResult
+    func addScript(label: String, path: String, workingDirectory: String? = nil,
+                   timeout: TimeInterval = ScriptConfig.defaultTimeout) -> Bool {
+        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty, !path.isEmpty else {
+            scriptError = "A script needs a name and a chosen file."
+            return false
+        }
+        guard path.hasPrefix("/") else {
+            scriptError = "The script path must be absolute — choose the file with the browser."
+            return false
+        }
+        guard !scripts.contains(where: { $0.label == label }) else {
+            scriptError = "A script named “\(label)” already exists."
+            return false
+        }
+        scripts.append(ScriptConfig(label: label, path: path,
+                                    workingDirectory: Self.trimmedOrNil(workingDirectory),
+                                    timeout: timeout))
+        scriptError = nil
+        persistScripts()
+        return true
+    }
+
+    func removeScript(label: String) {
+        let before = scripts
+        scripts.removeAll { $0.label == label }
+        if scripts != before { persistScripts() }
+    }
+
+    /// Opens the native file browser and, on a selection, fills `newScriptPath` with the chosen file —
+    /// and, when the operator hasn't already named the script, suggests the file's name (no extension).
+    /// A cancelled chooser leaves the draft untouched. (S34 — the script is picked, never typed, so its
+    /// path is always an absolute, real file; chat never supplies it — §4d / I1.)
+    func chooseScriptFile() {
+        guard let path = folderPicker.chooseFile() else { return }
+        newScriptPath = path
+        if newScriptLabel.trimmingCharacters(in: .whitespaces).isEmpty {
+            newScriptLabel = Self.suggestedLabel(forPath: path)
+        }
+    }
+
+    /// Opens the native folder browser and, on a selection, fills the optional working directory.
+    /// A cancelled chooser leaves the draft untouched.
+    func chooseScriptWorkingDirectory() {
+        guard let path = folderPicker.chooseFolder() else { return }
+        newScriptWorkingDirectory = path
+    }
+
+    /// Commits the drafted script via `addScript`; on success clears the draft (timeout back to the
+    /// default), on failure keeps it (with `scriptError` set) so the operator can fix the input.
+    @discardableResult
+    func submitNewScript() -> Bool {
+        guard addScript(label: newScriptLabel, path: newScriptPath,
+                        workingDirectory: newScriptWorkingDirectory,
+                        timeout: newScriptTimeout) else { return false }
+        newScriptLabel = ""; newScriptPath = ""; newScriptWorkingDirectory = ""
+        newScriptTimeout = ScriptConfig.defaultTimeout
+        return true
+    }
+
+    /// The suggested label for a chosen script file: its file name with the extension dropped
+    /// (`deploy-staging.sh` → `deploy-staging`). Purely derived so the suggestion is tested without a
+    /// real panel; the operator can override it before adding.
+    static func suggestedLabel(forPath path: String) -> String {
+        let file = (path.trimmingCharacters(in: .whitespaces) as NSString).lastPathComponent
+        return (file as NSString).deletingPathExtension
+    }
+
+    /// Writes the current scripts to the config store and notifies the running guard (S34).
+    private func persistScripts() {
+        configStore.setScripts(scripts)
+        onScriptsChanged?(scripts)
     }
 
     // MARK: - Claude agent action (§4b / S22)

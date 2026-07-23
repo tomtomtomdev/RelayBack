@@ -89,6 +89,7 @@ struct SettingsView: View {
         case .connection: connectionPane
         case .allowlist:  allowlistPane
         case .repos:      reposPane
+        case .scripts:    scriptsPane
         case .claude:     claudePane
         case .security:   securityPane
         case .audit:      auditPane
@@ -474,6 +475,141 @@ struct SettingsView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
     }
 
+    // MARK: - Scripts pane (S34 — the §4d operator-picked local-script allowlist)
+    //
+    // Thin glue over `SettingsModel`, mirroring the Repos pane. The script file + working directory are
+    // picked from native browsers (reusing the `FolderPicking` seam), never typed — so what gets
+    // registered is a real file the operator pointed at (chat never supplies a path, arg, or content —
+    // §4d / I1). All state/validation lives in the model; this renders it. `/run` selects among them.
+
+    private var scriptsPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                paneHeader("Scripts",
+                           detail: "Local scripts you can trigger from Telegram with /run. Each runs via its own shebang (no shell) as the normal user, only while armed.")
+
+                VStack(spacing: 8) {
+                    ForEach(model.scripts) { script in
+                        scriptRow(script)
+                    }
+                }
+
+                if model.scripts.isEmpty {
+                    Text("No scripts yet — add one below, then /run from your phone.")
+                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                }
+
+                addScriptForm
+
+                if let error = model.scriptError {
+                    Text(error).font(.caption).foregroundStyle(Theme.danger)
+                }
+            }
+            .padding(EdgeInsets(top: 22, leading: 24, bottom: 22, trailing: 24))
+        }
+    }
+
+    private func scriptRow(_ script: ScriptConfig) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "scroll.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(script.label)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(script.path)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+                if let cwd = script.workingDirectory {
+                    Text("cwd: \(cwd)")
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Remove") { model.removeScript(label: script.label) }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.danger)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
+    private var addScriptForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ADD SCRIPT")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x6B7280))
+                .kerning(0.5)
+            repoField("Name (e.g. Deploy Staging)", text: $model.newScriptLabel)
+                .onSubmit { model.submitNewScript() }
+            scriptChooserRow(icon: "scroll", placeholder: "No script chosen",
+                             value: model.newScriptPath, title: "Choose Script…") {
+                model.chooseScriptFile()
+            }
+            scriptChooserRow(icon: "folder", placeholder: "Inherit launcher directory (optional)",
+                             value: model.newScriptWorkingDirectory, title: "Choose Folder…") {
+                model.chooseScriptWorkingDirectory()
+            }
+            scriptTimeoutRow
+            Button("Add script") { model.submitNewScript() }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(model.newScriptLabel.trimmingCharacters(in: .whitespaces).isEmpty
+                          || model.newScriptPath.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.top, 4)
+    }
+
+    /// A picked-path row (script file or working directory): shows the selection (or a placeholder)
+    /// next to a chooser button. The value is picked from a native browser, never typed.
+    private func scriptChooserRow(icon: String, placeholder: String, value: String,
+                                  title: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .foregroundStyle(value.isEmpty ? Theme.textTertiary : Theme.accent)
+                Text(value.isEmpty ? placeholder : value)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(value.isEmpty ? Theme.textTertiary : Theme.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.12)))
+
+            Button(title, action: action)
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.accent)
+        }
+    }
+
+    private var scriptTimeoutRow: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Timeout").font(.system(size: 13.5))
+                Text("The script is terminated if it exceeds this.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 12)
+            Stepper(value: $model.newScriptTimeout, in: 60...3600, step: 60) {
+                Text("\(Int(model.newScriptTimeout / 60)) min")
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.chip).fill(Theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip).stroke(Theme.cardBorder))
+            }
+        }
+        .padding(.horizontal, 13).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.cardBorder))
+    }
+
     // MARK: - Claude pane (S22 — the §4b agent-action capability)
     //
     // Thin glue over `SettingsModel`: the toggle, permission picker, executable file chooser, and
@@ -845,6 +981,17 @@ private struct SecondaryButtonStyle: ButtonStyle {
             RepoConfig(name: "notes", root: "/Users/op/dev/Notes"),
         ])
     ), initialPane: .repos)
+}
+
+#Preview("Scripts") {
+    SettingsView(model: SettingsModel(
+        store: PreviewSecretStore(),
+        configStore: PreviewConfigStore(scripts: [
+            ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy-staging.sh"),
+            ScriptConfig(label: "Backup", path: "/Users/op/bin/backup.sh",
+                         workingDirectory: "/Users/op/data"),
+        ])
+    ), initialPane: .scripts)
 }
 
 #Preview("Claude — restricted") {

@@ -51,6 +51,13 @@ final class AppRuntime {
         settings.onReposChanged = { [weak self] repos in
             self?.coordinator?.updateRepos(repos)
         }
+        // S34: same pattern for the operator-picked local scripts (§4d) — an edit hot-reloads the
+        // guard's action registry, so a script added/removed in Settings takes effect at once (a
+        // removed one can no longer run — I2). Each `ScriptConfig` maps to a fixed-shape `Action`,
+        // dropping any that fail closed on a non-absolute path (I1); `/run` selects among them.
+        settings.onScriptsChanged = { [weak self] scripts in
+            self?.coordinator?.updateActions(scripts.compactMap { $0.toAction() })
+        }
     }
 
     /// Begins long-polling if the app is configured (bot token + TOTP secret present). Idempotent —
@@ -85,9 +92,14 @@ final class AppRuntime {
         // reachable until the operator enables it in Settings (S22).
         let claudeEnabled = configStore.claudeEnabled()
         let claudeProfile = configStore.claudeProfile()
+        // S33: the runnable-action registry is the operator-picked local-script allowlist (§4d) —
+        // each `ScriptConfig` mapped to a fixed-shape `Action` (absolute executable, empty argv; I1),
+        // dropping any that fail closed (non-absolute/empty path). `/run` selects among them. The seed
+        // registry stays empty; scripts are the only source of runnable actions in production.
+        let scriptActions = configStore.scripts().compactMap { $0.toAction() }
         let authGuard = AuthGuard(allowlist: Set(configStore.allowlist()),
                                   totpSecret: secret,
-                                  registry: .seed,
+                                  registry: ActionRegistry(actions: scriptActions),
                                   clock: clock,
                                   idleTimeout: idleTimeout,
                                   parameterizedCommands: GitCommands.all,
@@ -154,7 +166,9 @@ final class AppRuntime {
     /// The autocompleted command list, derived from the action registry, the control commands, and
     /// the parameterized git commands (S17). `/build` (S18) and `/sim` (S19) were unwired, so they are
     /// no longer advertised. The agent action `/claude` (S21) is appended only when `claudeEnabled`,
-    /// so a disabled capability is not advertised (I5). `dropFirst()` strips the slash Telegram adds.
+    /// so a disabled capability is not advertised (I5). `/run` (S33) is always advertised — it reports
+    /// "no scripts configured" when the operator hasn't picked any. `dropFirst()` strips the slash
+    /// Telegram adds.
     private static func botCommands(claudeEnabled: Bool) -> [BotCommand] {
         let actions = ActionRegistry.seed.actions.map {
             BotCommand(command: String($0.command.dropFirst()), description: $0.description)
@@ -172,6 +186,7 @@ final class AppRuntime {
             BotCommand(command: "repos", description: "List configured repos"),
             BotCommand(command: "cd", description: "Select the active repo"),
             BotCommand(command: "pwd", description: "Show the active repo"),
+            BotCommand(command: "run", description: "Run a configured local script"),   // S33 §4d
         ]
         return controls + actions + dev
     }
