@@ -598,6 +598,79 @@ I1/I2/I4 unchanged and I3 holds for the new secret.
 
 ---
 
+## Configurable local scripts (S31–S34) — `/run` operator-picked scripts *(added 2026-07-23)*
+
+**Why added:** the operator wants to trigger their own local maintenance/deploy scripts from
+Telegram without hard-coding each one. The Mac operator picks a local script **file** in Settings;
+`/run` triggers it from chat. This is a threat-model change (operator-defined executables) but stays
+inside I1: the script is an ordinary registry `Action` (fixed absolute executable, fixed argv, execve
+via the script's shebang — never `/bin/sh -c`), and chat only *selects* among the locally-configured
+scripts — it never supplies a path, an argument, or script content.
+
+**Decisions locked (2026-07-23):** an allowlist of picked scripts (not a single bound script), with
+`/run` running the one directly / offering a tap-keyboard picker among several (mirrors S25 `/cd`);
+the script path is chosen only via the Settings file picker (`FolderPicking.chooseFile()`), always
+absolute; zero operator arguments in v1 (all args fixed — no §4a validated params on scripts); a
+non-absolute path fails closed at `ScriptConfig.toAction()` (never runnable). Config is non-secret
+(`ConfigStore`, JSON, fails closed to `[]`).
+
+**Scope guard:** no change to I1–I4 and no new invariant — a configured script is a registry `Action`.
+Every slice adds/keeps a test that chat text never fills the executable or an argv slot (only the
+`/run` token / a picked label selects a pre-configured entry) and that a non-absolute/empty path is
+refused. Runs as normal user under the restricted PATH (I4).
+
+### S31 — SPEC/PLAN/CLAUDE amendment *(docs only)*
+- **Goal:** scope §4d before code (this slice). SPEC §2 shell-non-goal annotation, new §4d, §5
+  grammar (`/run`), FR-13, §7 (`ScriptConfig` + module map); this PLAN section; a CLAUDE.md guardrail
+  bounding the configurable script allowlist.
+- **Done when:** docs are internally consistent; no code/test change (suite count unchanged).
+
+### S32 — `ScriptConfig` + persistence *(TDD)*
+- **Goal:** the persistence foundation, secret-free.
+  - `Core/ScriptConfig` (Codable): `label`, `path`, optional `workingDirectory`, `timeout`; pure
+    `toAction() -> Action?` that **fails closed** (nil) on a non-absolute/empty path and derives the
+    `command` token + `description` from the label.
+  - `ConfigStore.scripts()/setScripts(_:)` — JSON in `UserDefaults`, fails closed to `[]` (mirrors
+    `repos()`); `InMemoryConfigStore`/`PreviewConfigStore` updated.
+- **Tests first (RED):** `ScriptConfig` JSON round-trip incl. old blobs; `toAction` maps a valid entry
+  to the expected absolute executable + empty argv; **rejects a relative/empty path** (the I1
+  fail-closed check); config round-trips + fails closed to `[]`.
+- **Done when:** foundation tests green; nothing user-facing yet.
+
+### S33 — `/run` trigger + seed-from-config + hot-reload *(TDD)*
+- **Goal:** route `/run` and make the registry operator-configured.
+  - `AppRuntime` seeds the `ActionRegistry` from `configStore.scripts().compactMap { $0.toAction() }`
+    and advertises `/run` (and, if chosen, each script command) via `setMyCommands`.
+  - Hot-reload: `AuthGuard.updateActions(_:)` (mirrors `updateAllowlist`) + `AppCoordinator`
+    passthrough; `AppRuntime` wires `onScriptsChanged`.
+  - `ControlResult.scriptMenu([ScriptConfig])`; `/run` with one script → runs it via the existing
+    `runAction` path; several → a `.keyboard` picker of labels; none →
+    `.invalidParameters("no scripts configured")`.
+- **Tests first (RED):** an operator-added script runs once armed / a removed one cannot (I2 +
+  hot-reload); `/run` offers the labels when several, runs directly when one, refuses when none;
+  invariant — only the `/run` token / a picked label flows from chat, never a path or an argument.
+- **Done when:** guard + coordinator scenario tests green; end-to-end with fakes proves I1/I2 hold.
+
+### S34 — Settings "Scripts" pane + wiring
+- **Goal:** make it configurable + reachable.
+  - New **Scripts** pane (mirrors Repos): a script list + add-form (label + a **Choose Script…**
+    file-picker row via the existing `FolderPicking.chooseFile()` seam + optional cwd via
+    `chooseFolder()` + a timeout stepper); remove affordance.
+  - `SettingsModel.scripts` + `addScript(...)`/`removeScript(...)` + `onScriptsChanged` (persist +
+    hot-reload, same shape as repos/allowlist).
+- **Tests first (RED):** view-model — script add/remove round-trips through `ConfigStore`; the file
+  picker fills the path / a cancel is a no-op; add/remove notifies `onScriptsChanged`. Thin views
+  Preview-verified.
+- **Done when:** pane usable in a Preview; view-model tests green; a picked script reaches the live
+  guard and runs from `/run`.
+
+**S31–S34 done when:** an operator picks a local script in Settings, `/arm`s, and triggers it via
+`/run` (directly or from the picker); chat never supplies a path, argument, or script content (proven
+by an invariant test); output returns via the existing formatter; the run is audited secret-free; the
+suite is green; I1–I4 unchanged (no new invariant).
+
+---
+
 ## Definition of done (whole project, v1)
 
 All invariants (SPEC §4) hold, all FRs met, full suite green, app runs as an unattended

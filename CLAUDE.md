@@ -110,3 +110,9 @@ relevant invariant still holds.
   *configured* artifact to the *configured* endpoint only (both config, never chat). Don't add a new
   network destination, an operator-supplied URL, or a second stored third-party secret without a
   deliberate SPEC amendment first — and any such secret goes in Keychain, never `ConfigStore`.
+- Configurable local scripts (SPEC §4d, S31+) are operator-picked local files only: the script path
+  comes solely from the Settings file picker (never chat), is stored as a `ScriptConfig` and mapped to
+  a fixed absolute-path registry `Action` (execve via its shebang — never `/bin/sh -c`), and `/run`
+  only *selects* among the configured scripts. Never let a path, argument, or script body arrive from
+  Telegram, and a non-absolute path must fail closed (never runnable). This stays within I1 — don't
+  turn it into free-text or chat-supplied execution.

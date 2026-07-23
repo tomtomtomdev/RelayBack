@@ -5,6 +5,36 @@
 
 ## Current state
 
+- **S31 done — docs-only: scoped the `/run` configurable-local-scripts epic (SPEC §4d).** New epic
+  **S31–S34** (planned this session): let the Mac operator **pick local script files** in Settings
+  that Telegram `/run` can trigger. Approved shape: **(a)** an allowlist of picked scripts with a
+  `/run` tap-keyboard picker (runs directly when one is configured), zero operator args, global
+  (optional fixed cwd) — not repo-scoped. **This is docs-only planning ahead of code; it does NOT
+  change the pending build order** — the next *code* slice is still **S29** (release-epic guard
+  routing + coordinator run), then S30; the scripts-epic code begins at **S32**. Docs touched:
+  - **SPEC.md** — §2 shell-non-goal annotated (S31+: operator-picked local files run via execve/
+    shebang, still no `/bin/sh -c`, path/args never from chat); new **§4d "Configurable local
+    scripts"** (controls: script chosen locally not chat, absolute-path execve fails closed on a
+    non-absolute path, picker-not-free-text, reused hygiene + secret-free audit; **no new invariant**
+    — a script is an ordinary registry `Action` under I1–I4; threat-model note widening worst-case to
+    "trigger any operator-configured local script"); **§5** grammar (`/run`); **FR-13**; **§7**
+    (`ScriptConfig` in Core + module map).
+  - **PLAN.md** — new "Configurable local scripts (S31–S34)" section (why, decisions-locked, scope
+    guard, the four slices + done-criteria), mirroring the S26–S30 epic shape.
+  - **CLAUDE.md** — a guardrail bounding the configurable script allowlist (path only from the
+    Settings file picker, never chat; fixed absolute-path `Action`; non-absolute path fails closed;
+    stays within I1 — never free-text/chat-supplied execution).
+  - **Decisions locked:** picked-file allowlist + `/run` picker (not one bound script); path only via
+    `FolderPicking.chooseFile()` (always absolute); zero operator args in v1 (no §4a validated params
+    on scripts); `ScriptConfig` (`label`/`path`/`workingDirectory?`/`timeout`) → `Action` via a pure
+    `toAction()` that fails closed on a non-absolute path; config non-secret in `ConfigStore` (JSON,
+    fails closed to `[]`). The **run path already exists** (`ActionRegistry.match` → `Decision.runAction`
+    → `AppCoordinator.run`); the epic only adds config persistence, seed-from-config + hot-reload, the
+    `/run` picker, and a Settings pane.
+  - **Docs-only — no code/test change** (suite unchanged at **374 tests / 40 suites**; mirrors the
+    S26 docs-first precedent). Not build/test-verified because nothing compilable changed. **Next
+    code slice: S29** (release epic); the scripts-epic code begins at **S32** (`ScriptConfig` +
+    `ConfigStore.scripts()`, TDD).
 - **S28 done — pure `Core/ReleaseCommand` config→steps builder (secret-free).** The second code slice
   of the PGYER epic (S26–S30). Turns the S27 persistence (repo release fields + endpoint URL) into the
   `/release` archive→export→upload plan and the `/pgyer` upload-only step — all pure, no I/O, no

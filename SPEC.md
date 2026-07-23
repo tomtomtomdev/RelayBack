@@ -28,6 +28,11 @@ sends stdout/stderr/exit-code back to the chat.
   agent that can run tools, so this reintroduces **bounded arbitrary execution via a restricted
   agent**, scoped to the active repo and gated by a separate capability toggle. See §4b. "No
   shell, ever" (I1) is unchanged.)*
+  *(Amended S31+: the operator may configure a set of **local script files** (picked via the
+  Settings file picker) that `/run` can trigger. Each runs as a fixed absolute-path `Process`
+  executable via its own shebang — still no `/bin/sh -c`, and the path/args never come from chat, so
+  "No shell, ever" (I1) is unchanged. The script's *content* is arbitrary, but it is authored and
+  selected locally, never injected over Telegram. See §4d.)*
 - **No arbitrary/free-text command parameters.** Actions accept **only validated argv
   parameters** (see §4a): every parameter is passed as a fixed `Process` argv position —
   never through a shell — and must pass a strict validator (enum / regex / path drawn from a
@@ -228,6 +233,43 @@ targets (the endpoint + artifact are config, not chat), or exfiltration of the k
 never echoed). Accepted for single-operator personal use; the upload is opt-in per configured
 artifact and the key is a deliberate Keychain entry. Revisit before any shared deployment.
 
+### 4d. Configurable local scripts (`/run`, S31+)
+
+`/run` triggers an operator-configured **local script file** and returns its output. The operator
+selects the script on the Mac itself (a native file picker in Settings); Telegram only sends the
+bare `/run` token. Chat never supplies, names, or points at any file — it selects among the
+already-configured scripts, nothing more.
+
+**Controls (all must hold, in addition to I2's arm + identity gates):**
+- **Script is chosen locally, never from chat.** Each configured script is a `ScriptConfig` (label +
+  absolute `path` + optional fixed working directory + timeout), persisted in `ConfigStore`. The path
+  comes only from the Settings file picker (an `NSOpenPanel` selection is always absolute), so no path
+  — and no script content — ever arrives over Telegram. `/run` takes **no operator argument**.
+- **Absolute-path execve — no shell (I1 unchanged).** The configured path becomes the `Action`'s
+  fixed executable, spawned via `Process` with a fixed (empty) argv. The kernel resolves the script's
+  own shebang; RelayBack never invokes `/bin/sh -c`. A non-absolute path is refused at
+  config→`Action` mapping (fails closed — never runnable). A missing or non-executable file surfaces
+  as a normal non-zero result, not a shell fallback.
+- **Selection is a picker, not free text.** With one script configured, `/run` runs it. With several
+  it replies with a one-time tap keyboard whose buttons are the configured **labels**; the tapped
+  script runs. With none it refuses (`⚠️ no scripts configured`). The tap selects a pre-configured
+  entry — it never carries a path or an argument.
+- **Execution hygiene + audit reused.** Each run spawns the absolute-path script as the normal user
+  under the restricted PATH, single-action concurrency, per-script timeout that kills the run (I4).
+  The audit line is uniform — timestamp, `from.id`, `action=/run` (or the script's command), exit
+  code — **no path, no output, no secrets** (I3).
+
+**No new invariant.** A configured script is an ordinary registry `Action` (fixed absolute executable
++ fixed argv), so I1–I4 govern it unchanged: chat text never fills the executable slot or an argv
+position; it only selects an already-configured entry.
+
+**Threat-model note.** This widens the worst-case-on-full-auth-bypass to *also* "**triggering any
+operator-configured local script**." A script the operator wrote can itself do anything the user
+account can — but it is authored and selected **locally**, never injected or parameterized from chat,
+and runs only while armed and authorized. It does not grant a shell to Telegram, arbitrary file
+selection from chat, or operator-supplied arguments. Accepted for single-operator personal use; the
+script set is an explicit, locally-picked allowlist. Revisit before any shared deployment.
+
 ## 5. Command grammar (operator-facing)
 
 Control commands (handled internally, always available to allowlisted users):
@@ -267,6 +309,13 @@ Release & distribution commands (§4c, run in the active repo; require `/cd` fir
 - `/pgyer` — upload the repo's configured `uploadArtifact` (`.ipa`/`.dmg`) to PGYER only, without a
   rebuild; no argument. Same key/artifact preconditions (S26+).
 
+Local-script command (§4d, operator-configured local scripts):
+- `/run` — trigger an operator-configured local script. With one configured it runs directly; with
+  several it offers them as a one-time tap keyboard (button labels are the configured script labels),
+  and the tapped script runs. No operator argument; the script path is chosen locally in Settings and
+  is never supplied via chat (S31+). With none configured it replies `⚠️ no scripts configured`.
+  Requires an armed session.
+
 Agent command (§4b, run in the active repo; requires `/cd` first):
 - `/claude <prompt>` — run Claude Code headless in the active repo with the configured permission
   profile; returns its output. Requires `claudeEnabled` (§4b) and an armed session with an active
@@ -303,6 +352,12 @@ Agent command (§4b, run in the active repo; requires `/cd` first):
   `RepoConfig` + `ConfigStore` (endpoint URL) + the Keychain (PGYER key); the key is passed via a
   0600 `curl --config` file (never argv), and a missing key/field refuses the run. Each step delivers
   via the existing formatter and writes a secret-free audit line (§4c). No operator argument.
+- **FR-13 Configurable local scripts.** When armed, `/run` triggers an operator-configured local
+  script (chosen via the Settings file picker, stored as a `ScriptConfig` in `ConfigStore`): one
+  configured → runs it; several → a one-time tap-keyboard picker of labels; none → an
+  `.invalidParameters` reply. The script is spawned as a fixed absolute-path `Action` (no shell, no
+  operator argument), its output delivered via the existing formatter, and one secret-free audit line
+  written (§4d).
 
 ## 7. Architecture & modules
 
@@ -313,7 +368,7 @@ testable with fakes — no live network or real process spawning in tests.
 ```
 RelayBack/
 ├── App/         RelayBackApp (entry), AppCoordinator (orchestration brain)
-├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock, ClaudeInvocation, ReleaseCommand   ← pure, TDD-first
+├── Core/        TOTP, AuthGuard, ActionRegistry, OutputFormatter, Clock, ClaudeInvocation, ReleaseCommand, ScriptConfig   ← pure, TDD-first
 ├── Telegram/    TelegramTransport (protocol), TelegramClient (URLSession), TelegramModels
 ├── Execution/   CommandRunning (protocol), ProcessCommandRunner (Process impl), ClaudeRunning (+ ProcessClaudeRunner), CurlConfigWriting
 ├── Storage/     KeychainStore (protocol + impl), AuditLog
@@ -355,6 +410,11 @@ RelayBackTests/  mirrors Core/ + Coordinator + JSON fixtures + fakes
 - **CurlConfigWriting** (Execution, S26+) — protocol + in-memory fake; the real impl writes the 0600
   `curl --config` file (carrying the PGYER key + form fields) to a temp path and deletes it after the
   upload. Keeps the key out of argv and the coordinator unit-testable without touching the real FS.
+- **ScriptConfig** (Core, S31+) — an operator-configured local script: `label`, absolute `path`,
+  optional `workingDirectory`, `timeout`. Pure `toAction() -> Action?` maps it to a registry `Action`,
+  **failing closed** (nil) on a non-absolute path so a bad entry is never runnable. Persisted
+  (non-secret) via `ConfigStore.scripts()`/`setScripts(_:)`; `/run` selects among them and routes
+  through the existing `ActionRegistry` match → `runAction` path. No I/O.
 
 ## 8. Tech & platform decisions
 
