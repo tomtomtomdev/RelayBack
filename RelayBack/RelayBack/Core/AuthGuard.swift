@@ -34,6 +34,16 @@ enum Decision: Equatable {
     /// coordinator runs it via `ClaudeRunning`; the prompt is NOT validated — it is contained by the
     /// profile + cwd, never by pretending to validate it (§4b).
     case runClaude(prompt: String, repoRoot: String, profile: ClaudeProfile)
+    /// Authorized sender, armed session, matched `/release` (§4c / S29). Carries the full build+upload
+    /// plan, built entirely from the active repo's config + the configured endpoint URL (never operator
+    /// text, I1). The coordinator runs the archive→export build steps in order (stop on first failure),
+    /// then performs the PGYER upload. The plan is secret-free — the API key is read from the Keychain
+    /// only at spawn time (I3), never here.
+    case runRelease(ReleasePlan)
+    /// Authorized sender, armed session, matched `/pgyer` (§4c / S29) — upload the configured artifact
+    /// without a rebuild. Carries the secret-free upload metadata; the coordinator reads the key at
+    /// spawn time and folds it into a 0600 `curl --config` file (I3), never argv/audit/reply.
+    case runPgyerUpload(PgyerUpload)
     /// Authorized sender, armed session, matched a parameterized command, but a parameter failed
     /// validation (§4a). Carries a short, secret-free reason; nothing is spawned.
     case invalidParameters(String)
@@ -78,6 +88,19 @@ struct AuthGuard {
     /// When a token matches, the guard builds the step sequence from the active repo via
     /// `SimulatorCommand.steps(for:)` — never operator text (I1).
     private let simulatorCommand: SimulatorCommandSpec?
+
+    /// The `/release` and `/pgyer` command specs (§4c / S29), or nil when release/distribution is not
+    /// enabled (the default, so every existing call site/test is unchanged). Production injects
+    /// `ReleaseCommand.spec` / `.pgyerSpec`. When a token matches, the guard builds the plan from the
+    /// active repo via `ReleaseCommand.plan`/`.upload` — never operator text (I1). Two separate specs
+    /// (per the S28 decision) so each is injected/advertised independently.
+    private let releaseCommand: ReleaseCommandSpec?
+    private let pgyerCommand: ReleaseCommandSpec?
+
+    /// The configured PGYER upload endpoint (§4c). Non-secret; passed to the plan builder as a curl
+    /// argument. Only ever read when a `/release`/`/pgyer` token matches (i.e. the specs are injected),
+    /// so the empty default is never used in production.
+    private let pgyerUploadURL: String
 
     /// The configured repo allowlist (§4a working-directory allowlist, S16). Empty in v1 until the
     /// operator adds repos in Settings. `/cd <name>` selects one; git/build/sim commands run in the
@@ -136,6 +159,9 @@ struct AuthGuard {
          parameterizedCommands: [ParameterizedCommand] = [],
          repoConfigs: [RepoConfig] = [],
          simulatorCommand: SimulatorCommandSpec? = nil,
+         releaseCommand: ReleaseCommandSpec? = nil,
+         pgyerCommand: ReleaseCommandSpec? = nil,
+         pgyerUploadURL: String = "",
          claudeEnabled: Bool = false,
          claudeProfile: ClaudeProfile = .default) {
         self.allowlist = allowlist
@@ -146,6 +172,9 @@ struct AuthGuard {
         self.parameterizedCommands = parameterizedCommands
         self.repoConfigs = repoConfigs
         self.simulatorCommand = simulatorCommand
+        self.releaseCommand = releaseCommand
+        self.pgyerCommand = pgyerCommand
+        self.pgyerUploadURL = pgyerUploadURL
         self.claudeEnabled = claudeEnabled
         self.claudeProfile = claudeProfile
     }
@@ -290,6 +319,12 @@ struct AuthGuard {
             if let sim = simulatorCommand, sim.command.lowercased() == token {
                 return resolveSimulator(text: text)
             }
+            if let rel = releaseCommand, rel.command.lowercased() == token {
+                return resolveRelease(text: text)
+            }
+            if let pgyer = pgyerCommand, pgyer.command.lowercased() == token {
+                return resolvePgyer(text: text)
+            }
             return .unknownCommand
         }
     }
@@ -366,6 +401,43 @@ struct AuthGuard {
             return .runActionSequence(steps)
         case let .invalid(reason):
             return .invalidParameters(reason)            // §4a: a repo missing config spawns nothing
+        }
+    }
+
+    /// Resolves the matched `/release` command (§4c / S29) to a `.runRelease` or `.invalidParameters`.
+    /// Same gate order as `/sim`: arm state first (I2), then the active-repo precondition, then the
+    /// no-operator-argument check (I1 — trailing chat text is never an argument), then the config-
+    /// derived plan. The plan is built entirely from the active repo + the configured endpoint URL,
+    /// never operator text; a repo missing any required field makes the builder refuse (§4c, fails closed).
+    private mutating func resolveRelease(text: String) -> Decision {
+        guard isArmed else { return .disarmed }                       // I2 before anything else
+        guard let repo = currentRepo else { return .invalidParameters("select a repo first") }
+        guard operatorArguments(in: text).isEmpty else {
+            return .invalidParameters("unexpected extra input")       // /release takes no operator arg
+        }
+        switch ReleaseCommand.plan(for: repo, uploadURL: pgyerUploadURL) {
+        case let .ok(plan):
+            extendArmedWindow()
+            return .runRelease(plan)
+        case let .invalid(reason):
+            return .invalidParameters(reason)            // §4c: a repo missing config uploads nothing
+        }
+    }
+
+    /// Resolves the matched `/pgyer` upload-only command (§4c / S29). Identical gating to `/release`,
+    /// but builds only the upload step from the active repo's configured artifact (no rebuild).
+    private mutating func resolvePgyer(text: String) -> Decision {
+        guard isArmed else { return .disarmed }
+        guard let repo = currentRepo else { return .invalidParameters("select a repo first") }
+        guard operatorArguments(in: text).isEmpty else {
+            return .invalidParameters("unexpected extra input")       // /pgyer takes no operator arg
+        }
+        switch ReleaseCommand.upload(for: repo, uploadURL: pgyerUploadURL) {
+        case let .ok(upload):
+            extendArmedWindow()
+            return .runPgyerUpload(upload)
+        case let .invalid(reason):
+            return .invalidParameters(reason)
         }
     }
 

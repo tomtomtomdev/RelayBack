@@ -35,6 +35,19 @@ final class AppCoordinator {
     private let audit: AuditSink
     private let clock: Clock
 
+    /// Reads the PGYER API key at upload time (§4c / S29 — wired to `SecretStore.pgyerApiKey`). It is
+    /// a provider (not the key itself) so the key is fetched from the Keychain only when an upload
+    /// actually runs, held just long enough to write the 0600 config file, and never stored on this
+    /// object (I3). Defaults to "no key" so existing call sites compile and fail closed until wired (S30).
+    private let pgyerKeyProvider: () throws -> String?
+
+    /// Writes/deletes the 0600 `curl --config` file that carries the PGYER key out of argv (§4c / I3).
+    private let curlConfigWriter: CurlConfigWriting
+
+    /// Wall-clock limit for the PGYER upload spawn. Uploads are network-bound (an `.ipa` over a slow
+    /// link), so this is generous but bounded — the runner terminates curl if it is exceeded.
+    private let uploadTimeout: TimeInterval = 600
+
     /// Called after an action finishes, with its command token and result — the runtime wires this
     /// to push the popover's "Last result" card (S13b). Optional so tests/headless runs need not set it.
     var onActionCompleted: ((String, CommandResult) -> Void)?
@@ -44,13 +57,17 @@ final class AppCoordinator {
          claudeRunner: ClaudeRunning = ProcessClaudeRunner(),
          transport: TelegramTransport,
          audit: AuditSink,
-         clock: Clock) {
+         clock: Clock,
+         pgyerKeyProvider: @escaping () throws -> String? = { nil },
+         curlConfigWriter: CurlConfigWriting = TempFileCurlConfigWriter()) {
         self.authGuard = authGuard
         self.runner = runner
         self.claudeRunner = claudeRunner
         self.transport = transport
         self.audit = audit
         self.clock = clock
+        self.pgyerKeyProvider = pgyerKeyProvider
+        self.curlConfigWriter = curlConfigWriter
     }
 
     /// Whether the session is currently armed — read by the menu bar to show live arm state (S11).
@@ -137,6 +154,15 @@ final class AppCoordinator {
             // guard already enforced armed AND claudeEnabled AND active repo; here we just spawn.
             await runClaude(prompt: prompt, repoRoot: repoRoot, profile: profile,
                             fromId: fromId, chatId: chatId)
+
+        case let .runRelease(plan):
+            // §4c / S29: archive → export → upload. Build steps stop at the first failure; the upload
+            // reads the PGYER key at spawn time and keeps it out of argv (I3). Audited as `/release`.
+            await runRelease(plan, fromId: fromId, chatId: chatId)
+
+        case let .runPgyerUpload(upload):
+            // §4c / S29: upload the configured artifact only (no rebuild). Audited as `/pgyer`.
+            await runUpload(upload, command: "/pgyer", fromId: fromId, chatId: chatId)
         }
     }
 
@@ -223,6 +249,44 @@ final class AppCoordinator {
                            fromId: Int64, chatId: Int64) async {
         let result = await claudeRunner.run(prompt: prompt, repoRoot: repoRoot, profile: profile)
         await deliver(result, command: "/claude", fromId: fromId, chatId: chatId)
+    }
+
+    // MARK: - Release & distribution (§4c / S29 — the only path that uploads off-box)
+
+    /// Runs the `/release` pipeline: the config-built archive → export steps in order (stop at the
+    /// first non-zero exit, so a failed build never uploads), then the PGYER upload. Each build step
+    /// goes through the same `runStep` as any other action (I1 — no operator text), audited as `/release`.
+    private func runRelease(_ plan: ReleasePlan, fromId: Int64, chatId: Int64) async {
+        for step in plan.buildSteps {
+            let result = await runStep(step, fromId: fromId, chatId: chatId)
+            if result.exitCode != 0 { return }   // halt before upload if archive/export failed
+        }
+        await runUpload(plan.upload, command: "/release", fromId: fromId, chatId: chatId)
+    }
+
+    /// Performs a PGYER upload: read the API key from the Keychain HERE (only at spawn time), fold it
+    /// into a 0600 `curl --config` file, spawn `/usr/bin/curl --config <file> <url>`, then delete the
+    /// file. The key is in the config file, never in argv (`ps`), the audit log, or a reply (§4c / I3).
+    /// A missing key or a write failure fails the upload closed with a secret-free warning + audit line.
+    private func runUpload(_ upload: PgyerUpload, command: String, fromId: Int64, chatId: Int64) async {
+        // I3: the key materializes only in this scope, just long enough to write the config file.
+        let key = (try? pgyerKeyProvider()).flatMap { $0 }
+        guard let key, !key.isEmpty else {
+            await reply(chatId, "⚠️ no PGYER API key configured")     // fail closed — nothing spawns
+            record(fromId: fromId, event: .rejected(reason: "no PGYER API key configured"))
+            return
+        }
+        guard let configPath = try? curlConfigWriter.writeConfig(upload.configFileBody(apiKey: key)) else {
+            await reply(chatId, "⚠️ could not prepare the upload")
+            record(fromId: fromId, event: .rejected(reason: "could not prepare the upload"))
+            return
+        }
+        // I1: fixed executable + fixed argv. The key is inside the 0600 config file, NOT here — so it
+        // never appears in `ps`. The endpoint URL rides as the sole positional argument.
+        let curl = Action(command: command, description: "Upload to PGYER", executable: "/usr/bin/curl",
+                          arguments: ["--config", configPath, upload.url], timeout: uploadTimeout)
+        _ = await runStep(curl, fromId: fromId, chatId: chatId)
+        curlConfigWriter.removeConfig(at: configPath)   // the key file must not outlive the spawn (I3)
     }
 
     /// The shared delivery tail for every run — fixed action, `/sim` step, or `/claude` agent turn:

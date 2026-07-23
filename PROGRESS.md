@@ -5,6 +5,64 @@
 
 ## Current state
 
+- **S29 done — `/release` + `/pgyer` guard routing + coordinator run (PGYER epic §4c).** The second-to-
+  last slice of the PGYER epic (S26–S30), landed out of order after the scripts epic (S31–S34) — S28's
+  pure `ReleaseCommand` builder was done, but S29 (routing + run) and S30 (Settings UI) had been skipped
+  while the scripts epic went first. `/release` (archive → export → upload) and `/pgyer` (upload-only)
+  now flow end-to-end through the guard + coordinator, gated OFF in production until S30 injects the
+  specs into `AppRuntime`. TDD, all pure/`AuthGuard`/coordinator logic; the one thin I/O type is
+  smoke-tested. New pieces:
+  - **`AuthGuard` `/release` + `/pgyer` routing** — new injected `releaseCommand`/`pgyerCommand:
+    ReleaseCommandSpec?` (both nil-defaulted, like `simulatorCommand`; production injects
+    `ReleaseCommand.spec`/`.pgyerSpec`) + `pgyerUploadURL: String = ""`. Matched in the `default` branch
+    after the simulator check → `resolveRelease`/`resolvePgyer`, gate order mirrors `resolveSimulator`:
+    **arm (I2) first → active repo → no operator arg (I1) → config-derived plan** via
+    `ReleaseCommand.plan`/`.upload`, else `.invalidParameters(reason)` (fails closed on a repo missing
+    any required field). **I1:** trailing chat text is rejected (`/release ; rm -rf /` →
+    `.invalidParameters("unexpected extra input")`) — it never becomes an argument. New
+    `Decision.runRelease(ReleasePlan)` / `.runPgyerUpload(PgyerUpload)` (both Equatable via S28's types).
+  - **`AppCoordinator` run path** — new injected `pgyerKeyProvider: () throws -> String? = { nil }`
+    (fail-closed default) + `curlConfigWriter: CurlConfigWriting = TempFileCurlConfigWriter()`.
+    `runRelease` runs the build steps via the existing `runStep` (stop on first non-zero — a failed
+    archive never uploads), then `runUpload`; `.runPgyerUpload` calls `runUpload` directly. `runUpload`
+    reads the key **only here** (spawn time), folds it into `PgyerUpload.configFileBody(apiKey:)`, writes
+    a 0600 `curl --config` file, spawns `/usr/bin/curl --config <file> <url>` through `runStep`, then
+    deletes the file. Missing key / write failure → fail closed (secret-free `⚠️` + `.rejected` audit,
+    no curl spawn). Build steps audit as `/release`, the standalone upload as `/pgyer`.
+  - **New `Execution/CurlConfigWriting` seam** + real `TempFileCurlConfigWriter` (0600 temp file, unique
+    name, delete) — the mechanism that keeps the key out of argv (`ps`). `FakeCurlConfigWriter` records
+    written bodies + removed paths for the tests.
+  - **Decisions locked:**
+    - *I3 is proven structurally at the coordinator.* `releaseKeyNeverAppearsInArgvAuditOrReply` asserts a
+      sentinel key appears in **none** of the recorded argv / audit lines / sent replies, and **does**
+      appear in the config-file body the writer received (the one intended channel). The key never
+      touches `Core`/the guard/the `Decision` — only the coordinator reads it at spawn time.
+    - *Build-then-key ordering (per PLAN).* `/release` runs archive+export first, then checks the key;
+      a missing key fails the upload closed after the build. Follows PLAN S29 verbatim
+      (`runRelease runs the build steps … then reads the key (missing → refuse)`); a possible future
+      efficiency tweak (check key before the expensive archive) was left as a deviation-not-taken.
+    - *`.runRelease` carries `ReleasePlan`, `.runPgyerUpload` carries `PgyerUpload`* (matches PLAN's
+      `Decision.runRelease`/`.runPgyerUpload`); the curl step's command token (`/release` vs `/pgyer`)
+      is chosen by the coordinator at `runUpload`, not stored on the secret-free `PgyerUpload`.
+    - *No AppRuntime wiring yet (that is S30).* The specs are injectable-but-inert: nothing injects
+      `ReleaseCommand.spec` into the live guard, so `/release`/`/pgyer` reply `❓ Unknown command` in
+      production until S30 (Settings UI + `AppRuntime` inject/advertise/hot-reload + the real
+      `SecretStore.pgyerApiKey` key provider + `TempFileCurlConfigWriter`). The coordinator's real
+      defaults (`{ nil }` provider + `TempFileCurlConfigWriter`) mean AppRuntime compiles unchanged.
+  - ✅ **Verified green on macOS** (this session): `** TEST BUILD SUCCEEDED **`, then full
+    `RelayBackTests` = **430 tests / 43 suites** passing (exit 0, `** TEST EXECUTE SUCCEEDED **`) via
+    `test-without-building` after `pkill -9 -f RelayBack.app` — no test-host flake. **+17 tests / +1
+    suite** vs S34 (413/42): 9 `AuthGuardTests` (release not-matchable/requires-armed/requires-repo/
+    missing-config/fully-configured/rejects-extra-input; pgyer configured/no-artifact/requires-armed),
+    6 `AppCoordinatorTests` (release archive→export→upload + secret-free audit; key-never-in-argv/audit/
+    reply I3; stops-on-archive-failure; missing-key-runs-builds-but-refuses-upload; pgyer uploads-only;
+    pgyer-disarmed-no-spawn), 2 `CurlConfigWriterTests` (writes-0600-exact-body-then-deletes;
+    fresh-path-per-write). App builds clean. **Next slice: S30** — Settings UI (PGYER key `SecureField`
+    via `SecretStore`, upload-URL field via `ConfigStore`, repo add-form gains `workspace`/
+    `exportOptionsPlist`/`uploadArtifact`/`pgyerDescription`) + `AppRuntime` inject/advertise/hot-reload.
+    Then the PGYER epic (S26–S30) is complete. **Manual smoke (not in CI) still pending for S30:** set
+    key/URL + a repo, `/arm`→`/cd`→`/release`; confirm archive→export→upload, stop-on-failure,
+    missing-key refusal, and a secret-free audit log.
 - **S34 done — Settings "Scripts" pane + hot-reload wiring. The configurable-local-scripts epic
   (§4d / S31–S34) is COMPLETE.** The operator can now pick local script files entirely from Settings;
   an add/remove **hot-reloads the running guard's action registry** at once (no restart), so the

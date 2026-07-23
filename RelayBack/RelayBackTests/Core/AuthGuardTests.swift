@@ -379,11 +379,16 @@ struct AuthGuardTests {
     private func makeGuard(_ clock: RelayBack.Clock,
                            commands: [ParameterizedCommand],
                            repoConfigs: [RepoConfig] = [],
-                           simulatorCommand: SimulatorCommandSpec? = nil) -> AuthGuard {
+                           simulatorCommand: SimulatorCommandSpec? = nil,
+                           releaseCommand: ReleaseCommandSpec? = nil,
+                           pgyerCommand: ReleaseCommandSpec? = nil,
+                           pgyerUploadURL: String = "") -> AuthGuard {
         AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
                   clock: clock, idleTimeout: idleTimeout,
                   parameterizedCommands: commands, repoConfigs: repoConfigs,
-                  simulatorCommand: simulatorCommand)
+                  simulatorCommand: simulatorCommand,
+                  releaseCommand: releaseCommand, pgyerCommand: pgyerCommand,
+                  pgyerUploadURL: pgyerUploadURL)
     }
 
     @Test func parameterizedCommandIsNotMatchableWithNoConfiguredSpecs() {
@@ -710,6 +715,110 @@ struct AuthGuardTests {
         var guardState = makeGuard(clock, commands: [], repoConfigs: [simRepo],
                                    simulatorCommand: SimulatorCommand.spec)
         #expect(guardState.authorize(fromId: allowed, text: "/sim") == .disarmed)
+    }
+
+    // MARK: - /release + /pgyer routing (S29 — §4c)
+
+    private let pgyerURL = "https://www.pgyer.com/apiv2/app/upload"
+
+    /// A repo fully configured for a release: workspace + scheme + export plist + upload artifact.
+    private var releaseRepo: RepoConfig {
+        RepoConfig(name: "app", root: "/Users/op/dev/App",
+                   scheme: "App", destination: "platform=macOS",
+                   workspace: "App.xcworkspace",
+                   exportOptionsPlist: "ExportOptions.plist",
+                   uploadArtifact: "build/App.ipa",
+                   pgyerDescription: "nightly")
+    }
+
+    @Test func releaseNotMatchableWhenNotConfigured() {
+        // With no release spec injected, /release is just an unknown command (mirrors /sim inertness).
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        #expect(guardState.authorize(fromId: allowed, text: "/release") == .unknownCommand)
+    }
+
+    @Test func releaseRequiresArmedSession() {
+        // I2: identity + arm gate first — a disarmed operator is told to arm, not shown a result.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   releaseCommand: ReleaseCommand.spec, pgyerUploadURL: pgyerURL)
+        #expect(guardState.authorize(fromId: allowed, text: "/release") == .disarmed)
+    }
+
+    @Test func releaseRequiresAnActiveRepo() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   releaseCommand: ReleaseCommand.spec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        // Armed, but no /cd yet → the §4c precondition fails, nothing is built.
+        #expect(guardState.authorize(fromId: allowed, text: "/release")
+                == .invalidParameters("select a repo first"))
+    }
+
+    @Test func releaseWithMissingConfigFailsClosed() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback],
+                                   releaseCommand: ReleaseCommand.spec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")   // relayback lacks release fields
+        #expect(guardState.authorize(fromId: allowed, text: "/release")
+                == .invalidParameters("no workspace configured for this repo"))
+    }
+
+    @Test func releaseFullyConfiguredResolvesToRunRelease() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   releaseCommand: ReleaseCommand.spec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        // The guard passes the active repo + configured URL straight to the pure builder (no mangling).
+        guard case let .runRelease(plan) = guardState.authorize(fromId: allowed, text: "/release") else {
+            return #expect(Bool(false), "fully-configured /release should resolve to .runRelease")
+        }
+        #expect(ReleaseCommand.plan(for: releaseRepo, uploadURL: pgyerURL) == .ok(plan))
+    }
+
+    @Test func releaseRejectsExtraOperatorInput() {
+        // I1: trailing chat text after /release is never an argument — the command takes no operator arg.
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   releaseCommand: ReleaseCommand.spec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        #expect(guardState.authorize(fromId: allowed, text: "/release ; rm -rf /")
+                == .invalidParameters("unexpected extra input"))
+    }
+
+    @Test func pgyerFullyConfiguredResolvesToRunPgyerUpload() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   pgyerCommand: ReleaseCommand.pgyerSpec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd app")
+        guard case let .runPgyerUpload(upload) = guardState.authorize(fromId: allowed, text: "/pgyer") else {
+            return #expect(Bool(false), "configured /pgyer should resolve to .runPgyerUpload")
+        }
+        #expect(ReleaseCommand.upload(for: releaseRepo, uploadURL: pgyerURL) == .ok(upload))
+    }
+
+    @Test func pgyerWithNoArtifactFailsClosed() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [relayback],
+                                   pgyerCommand: ReleaseCommand.pgyerSpec, pgyerUploadURL: pgyerURL)
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/cd relayback")   // no uploadArtifact configured
+        #expect(guardState.authorize(fromId: allowed, text: "/pgyer")
+                == .invalidParameters("no upload artifact configured for this repo"))
+    }
+
+    @Test func pgyerRequiresArmedSession() {
+        let clock = TestClock(start)
+        var guardState = makeGuard(clock, commands: [], repoConfigs: [releaseRepo],
+                                   pgyerCommand: ReleaseCommand.pgyerSpec, pgyerUploadURL: pgyerURL)
+        #expect(guardState.authorize(fromId: allowed, text: "/pgyer") == .disarmed)
     }
 
     // MARK: - Configurable local scripts (/run) — S33

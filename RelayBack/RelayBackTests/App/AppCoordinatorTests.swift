@@ -38,6 +38,9 @@ struct AppCoordinatorTests {
         /// Set only by the `/claude` harness (S21) — the agent runner, so a test can assert it was
         /// (or, for the I5 refusal cases, was NOT) invoked. nil for the fixed-action harnesses.
         var claudeRunner: FakeClaudeRunner? = nil
+        /// Set only by the `/release`/`/pgyer` harness (S29) — the curl-config writer, so a test can
+        /// prove the PGYER key went into the config FILE (the intended I3 channel) and nowhere else.
+        var curlWriter: FakeCurlConfigWriter? = nil
     }
 
     private func makeHarness(result: CommandResult = CommandResult(exitCode: 0, stdout: "up 3 days", stderr: "")) -> Harness {
@@ -644,5 +647,137 @@ struct AppCoordinatorTests {
         await h.coordinator.handle(update(fromId: allowed, text: "/run"))
 
         #expect(h.runner.runActions == [deployScript.toAction()!])
+    }
+
+    // MARK: - Release & distribution `/release` + `/pgyer` (S29 — §4c, proof of I1/I2/I3)
+
+    private let pgyerURL = "https://www.pgyer.com/apiv2/app/upload"
+    /// A distinctive sentinel so the I3 assertions can search argv/audit/reply for the key's absence.
+    private let pgyerKey = "PGYER-SECRET-abc123"
+
+    private var releaseRepo: RepoConfig {
+        RepoConfig(name: "app", root: "/Users/op/dev/App",
+                   scheme: "App", destination: "platform=macOS",
+                   workspace: "App.xcworkspace",
+                   exportOptionsPlist: "ExportOptions.plist",
+                   uploadArtifact: "build/App.ipa",
+                   pgyerDescription: "nightly")
+    }
+
+    /// A coordinator wired for `/release`/`/pgyer`: a fully-configured repo, a key provider, and a
+    /// fake curl-config writer. `key: nil` drives the missing-key fail-closed path.
+    private func makeReleaseHarness(key: String?,
+                                    result: CommandResult = CommandResult(exitCode: 0, stdout: "uploaded ok", stderr: "")) -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner(result: result)
+        let audit = InMemoryAuditSink()
+        let writer = FakeCurlConfigWriter()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret, registry: .seed,
+                                  clock: clock, idleTimeout: idleTimeout,
+                                  repoConfigs: [releaseRepo],
+                                  releaseCommand: ReleaseCommand.spec,
+                                  pgyerCommand: ReleaseCommand.pgyerSpec,
+                                  pgyerUploadURL: pgyerURL)
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         transport: transport, audit: audit, clock: clock,
+                                         pgyerKeyProvider: { key }, curlConfigWriter: writer)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner,
+                       audit: audit, clock: clock, curlWriter: writer)
+    }
+
+    private func armAndCd(_ h: Harness) async {
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/cd app"))
+    }
+
+    @Test func releaseRunsArchiveExportThenUpload() async {
+        let h = makeReleaseHarness(key: pgyerKey)
+        await armAndCd(h)
+        await h.coordinator.handle(update(fromId: allowed, text: "/release"))
+
+        // The three spawns in order: archive, export (both xcodebuild), then the curl upload.
+        #expect(h.runner.runActions.count == 3)
+        #expect(h.runner.runActions[0].executable == "/usr/bin/xcodebuild")
+        #expect(h.runner.runActions[0].arguments.first == "archive")
+        #expect(h.runner.runActions[1].arguments.first == "-exportArchive")
+        let curl = h.runner.runActions[2]
+        #expect(curl.executable == "/usr/bin/curl")
+        #expect(curl.arguments == ["--config", "/tmp/relayback-upload-fake.conf", pgyerURL])
+
+        // I3: the key is in the config FILE the writer received — never in the curl argv.
+        #expect(h.curlWriter?.writtenBodies.contains { $0.contains(pgyerKey) } == true)
+        // The key file is deleted right after the spawn (does not outlive the upload).
+        #expect(h.curlWriter?.removedPaths == ["/tmp/relayback-upload-fake.conf"])
+
+        // I3: each of the three runs is audited by the /release token + exit code only (never the
+        // key, never the output). Filter to the run events — /arm and /cd add their own control lines.
+        let runEvents = h.audit.entries.map(\.event).filter { if case .actionRan = $0 { true } else { false } }
+        #expect(runEvents == Array(repeating: .actionRan(command: "/release", exitCode: 0), count: 3))
+        #expect(h.audit.entries.allSatisfy { !$0.line.contains(pgyerKey) })
+    }
+
+    @Test func releaseKeyNeverAppearsInArgvAuditOrReply() async {
+        // The crown-jewel I3 invariant: the sentinel key must appear in NONE of argv / audit / reply,
+        // and MUST appear in the config-file body (the one intended channel).
+        let h = makeReleaseHarness(key: pgyerKey)
+        await armAndCd(h)
+        await h.coordinator.handle(update(fromId: allowed, text: "/release"))
+
+        #expect(h.runner.runActions.allSatisfy { action in
+            !action.arguments.contains { $0.contains(pgyerKey) } && !action.executable.contains(pgyerKey)
+        })
+        #expect(h.audit.entries.allSatisfy { !$0.line.contains(pgyerKey) })
+        #expect(h.transport.sentMessages.allSatisfy { !$0.text.contains(pgyerKey) })
+        #expect(h.curlWriter?.writtenBodies.contains { $0.contains(pgyerKey) } == true)   // the file, yes
+    }
+
+    @Test func releaseStopsOnArchiveFailureAndDoesNotUpload() async {
+        let h = makeReleaseHarness(key: pgyerKey)
+        h.runner.scriptedResults = [CommandResult(exitCode: 65, stdout: "", stderr: "archive failed")]
+        await armAndCd(h)
+        await h.coordinator.handle(update(fromId: allowed, text: "/release"))
+
+        // Only the archive ran — a failed build never proceeds to export or upload.
+        #expect(h.runner.runActions.count == 1)
+        #expect(h.runner.runActions[0].arguments.first == "archive")
+        #expect(h.curlWriter?.writtenBodies.isEmpty == true)   // no config file → key was never read into one
+    }
+
+    @Test func releaseWithMissingKeyRunsBuildsButRefusesUpload() async {
+        // The build steps still run (per plan order), but a missing key fails the upload closed — no
+        // curl spawn, no config file, a secret-free warning + audit line.
+        let h = makeReleaseHarness(key: nil)
+        await armAndCd(h)
+        await h.coordinator.handle(update(fromId: allowed, text: "/release"))
+
+        #expect(h.runner.runActions.count == 2)                    // archive + export only
+        #expect(h.runner.runActions.allSatisfy { $0.executable == "/usr/bin/xcodebuild" })
+        #expect(h.curlWriter?.writtenBodies.isEmpty == true)       // fail closed: nothing written
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("no PGYER API key") })
+        #expect(h.audit.entries.map(\.event).contains(.rejected(reason: "no PGYER API key configured")))
+    }
+
+    @Test func pgyerUploadsTheArtifactWithoutRebuilding() async {
+        let h = makeReleaseHarness(key: pgyerKey)
+        await armAndCd(h)
+        await h.coordinator.handle(update(fromId: allowed, text: "/pgyer"))
+
+        // Exactly one spawn — the curl upload; no xcodebuild.
+        #expect(h.runner.runActions.count == 1)
+        #expect(h.runner.runActions[0].executable == "/usr/bin/curl")
+        #expect(h.curlWriter?.writtenBodies.contains { $0.contains(pgyerKey) } == true)
+        // Audited as /pgyer, secret-free.
+        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/pgyer", exitCode: 0) })
+        #expect(h.audit.entries.allSatisfy { !$0.line.contains(pgyerKey) })
+    }
+
+    @Test func pgyerWhileDisarmedDoesNotSpawn() async {
+        let h = makeReleaseHarness(key: pgyerKey)
+        await h.coordinator.handle(update(fromId: allowed, text: "/pgyer"))   // never armed
+
+        #expect(h.runner.runCount == 0)                            // I2: disarmed → nothing spawns
+        #expect(h.curlWriter?.writtenBodies.isEmpty == true)
+        #expect(h.transport.sentMessages.first?.text.lowercased().contains("disarm") == true)
     }
 }
