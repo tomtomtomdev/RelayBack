@@ -711,4 +711,119 @@ struct AuthGuardTests {
                                    simulatorCommand: SimulatorCommand.spec)
         #expect(guardState.authorize(fromId: allowed, text: "/sim") == .disarmed)
     }
+
+    // MARK: - Configurable local scripts (/run) — S33
+
+    // Two operator-picked scripts. The registry the guard runs against is seeded from their
+    // config→action map (mirrors what `AppRuntime` does from `ConfigStore.scripts()`).
+    private var deployScript: ScriptConfig {
+        ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh")
+    }
+    private var backupScript: ScriptConfig {
+        ScriptConfig(label: "Backup", path: "/Users/op/bin/backup.sh")
+    }
+
+    private func makeScriptGuard(_ clock: RelayBack.Clock, scripts: [ScriptConfig]) -> AuthGuard {
+        AuthGuard(allowlist: [allowed], totpSecret: secret,
+                  registry: ActionRegistry(actions: scripts.compactMap { $0.toAction() }),
+                  clock: clock, idleTimeout: idleTimeout)
+    }
+
+    // I2: identity + arm gate first — a disarmed operator is told to arm, not shown the script menu.
+    @Test func runRequiresAnArmedSession() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        #expect(guardState.authorize(fromId: allowed, text: "/run") == .disarmed)
+    }
+
+    // With no scripts configured, `/run` says so rather than spawning anything (fails closed).
+    @Test func runWithNoScriptsConfiguredSaysSo() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/run")
+                == .invalidParameters("no scripts configured"))
+    }
+
+    // A single configured script runs directly — no picker needed.
+    @Test func runWithOneScriptRunsItDirectly() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/run") == .runAction(deployScript.toAction()!))
+    }
+
+    // Several scripts → the picker (labels), consumed by the next bare message (mirrors /cd, S25).
+    @Test func runWithSeveralScriptsOffersThePicker() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/run")
+                == .control(.scriptMenu([deployScript.toAction()!, backupScript.toAction()!])))
+    }
+
+    // After the picker, the operator's next (bare) message — a tapped label — selects & runs it.
+    @Test func scriptLabelAfterRunPromptSelectsIt() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/run")
+        #expect(guardState.authorize(fromId: allowed, text: "Backup") == .runAction(backupScript.toAction()!))
+    }
+
+    // A label that isn't configured, supplied after the picker, is refused — nothing spawns.
+    @Test func unknownScriptLabelAfterRunPromptIsRejected() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/run")
+        #expect(guardState.authorize(fromId: allowed, text: "nope") == .invalidParameters("unknown script"))
+    }
+
+    // A new command instead of picking cancels the picker (mirrors the /cd + /arm prompts).
+    @Test func commandAfterRunPromptCancelsThePicker() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        armed(&guardState, clock)
+        _ = guardState.authorize(fromId: allowed, text: "/run")
+        #expect(guardState.authorize(fromId: allowed, text: "/status") == .control(.status(isArmed: true)))
+        #expect(guardState.authorize(fromId: allowed, text: "Backup") == .unknownCommand)   // picker cancelled
+    }
+
+    // A bare label is ONLY consumed right after the picker — otherwise an idle word never silently
+    // runs a script (the I2-style guard from S20/S25).
+    @Test func bareScriptLabelWithoutPromptIsUnknown() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript, backupScript])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "Backup") == .unknownCommand)
+    }
+
+    // Hot-reload: a script added in Settings runs once armed; a removed one can no longer run (I2).
+    @Test func updateActionsHotReloadsRunnableScripts() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [])
+        armed(&guardState, clock)
+        #expect(guardState.authorize(fromId: allowed, text: "/run") == .invalidParameters("no scripts configured"))
+
+        guardState.updateActions([deployScript.toAction()!])
+        #expect(guardState.authorize(fromId: allowed, text: "/run") == .runAction(deployScript.toAction()!))
+
+        guardState.updateActions([])                       // removed in Settings
+        #expect(guardState.authorize(fromId: allowed, text: "/run") == .invalidParameters("no scripts configured"))
+    }
+
+    // I1: chat text after `/run` never becomes an argument or the executable — it is ignored; the
+    // resolved action is exactly the configured one (empty argv, the picked script's own path).
+    @Test func trailingChatTextAfterRunIsNeverAnArgument() {
+        let clock = TestClock(start)
+        var guardState = makeScriptGuard(clock, scripts: [deployScript])
+        armed(&guardState, clock)
+        let decision = guardState.authorize(fromId: allowed, text: "/run rm -rf / ; echo pwned")
+        #expect(decision == .runAction(deployScript.toAction()!))
+        if case let .runAction(action) = decision {
+            #expect(action.arguments.isEmpty)                        // no operator text reached argv
+            #expect(action.executable == "/Users/op/bin/deploy.sh")  // exactly the configured script
+        }
+    }
 }

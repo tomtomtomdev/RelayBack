@@ -580,4 +580,69 @@ struct AppCoordinatorTests {
         #expect(h.claudeRunner?.calls.last?.profile == claudeProfile)
         #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/claude", exitCode: 0) })
     }
+
+    // MARK: - Configurable local scripts (/run) — S33
+
+    private var deployScript: ScriptConfig {
+        ScriptConfig(label: "Deploy Staging", path: "/Users/op/bin/deploy.sh")
+    }
+    private var backupScript: ScriptConfig {
+        ScriptConfig(label: "Backup", path: "/Users/op/bin/backup.sh")
+    }
+
+    /// A harness whose registry is seeded from operator-picked scripts (as `AppRuntime` does).
+    private func makeScriptHarness(_ scripts: [ScriptConfig],
+                                   result: CommandResult = CommandResult(exitCode: 0, stdout: "done", stderr: "")) -> Harness {
+        let clock = TestClock(start)
+        let transport = FakeTelegramTransport()
+        let runner = FakeCommandRunner(result: result)
+        let audit = InMemoryAuditSink()
+        let authGuard = AuthGuard(allowlist: [allowed], totpSecret: secret,
+                                  registry: ActionRegistry(actions: scripts.compactMap { $0.toAction() }),
+                                  clock: clock, idleTimeout: idleTimeout)
+        let coordinator = AppCoordinator(authGuard: authGuard, runner: runner,
+                                         transport: transport, audit: audit, clock: clock)
+        return Harness(coordinator: coordinator, transport: transport, runner: runner, audit: audit, clock: clock)
+    }
+
+    @Test func runSingleScriptRunsItAndAuditsBySlug() async {
+        let h = makeScriptHarness([deployScript])
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/run"))
+
+        #expect(h.runner.runActions == [deployScript.toAction()!])   // I1: the configured action, no operator text
+        // I3: audit carries the slug command token + exit code only — never the script path.
+        #expect(h.audit.entries.contains { $0.event == .actionRan(command: "/deploy-staging", exitCode: 0) })
+    }
+
+    @Test func runSeveralScriptsSendsTheLabelKeyboardAndRunsThePick() async {
+        let h = makeScriptHarness([deployScript, backupScript])
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/run"))
+
+        #expect(h.runner.runCount == 0)                              // nothing spawned yet — awaiting the pick
+        let prompt = h.transport.sentMessages.last
+        #expect(prompt?.markup == .keyboard(["Deploy Staging", "Backup"]))   // labels only
+        // I3: the picker discloses labels, never the underlying script paths.
+        #expect(!(prompt?.text.contains("/Users/op/bin") ?? false))
+        #expect(h.audit.entries.contains { $0.event == .control("run prompt") })
+
+        await h.coordinator.handle(update(fromId: allowed, text: "Backup"))   // tap the label
+        #expect(h.runner.runActions == [backupScript.toAction()!])
+    }
+
+    @Test func updateActionsEnablesAPreviouslyEmptyRun() async {
+        // Hot-reload parity with the allowlist/repos: a script added in Settings reaches the live
+        // guard, so the next `/run` now spawns it; a removed one can no longer run (I2).
+        let h = makeScriptHarness([])
+        await h.coordinator.handle(update(fromId: allowed, text: "/arm \(goodCode(at: h.clock.now))"))
+        await h.coordinator.handle(update(fromId: allowed, text: "/run"))
+        #expect(h.runner.runCount == 0)                              // no scripts yet → nothing spawned
+        #expect(h.transport.sentMessages.contains { $0.text.contains("⚠️") && $0.text.contains("no scripts configured") })
+
+        h.coordinator.updateActions([deployScript.toAction()!])      // picked a script in Settings
+        await h.coordinator.handle(update(fromId: allowed, text: "/run"))
+
+        #expect(h.runner.runActions == [deployScript.toAction()!])
+    }
 }

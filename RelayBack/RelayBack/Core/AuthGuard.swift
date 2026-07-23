@@ -53,12 +53,17 @@ enum ControlResult: Equatable {
     case workingDirectory(RepoConfig?)  // /pwd → the active repo (nil when none selected)
     case repoList([RepoConfig])         // /repos → the configured repo allowlist
     case cdPrompt([RepoConfig])         // /cd with no name → offer the configured repos to pick (S25)
+    // S33 — configurable local scripts (§4d):
+    case scriptMenu([Action])           // /run with several scripts → offer their labels to pick
 }
 
 struct AuthGuard {
     private var allowlist: Set<Int64>
     private let totpSecret: Data
-    private let registry: ActionRegistry
+    /// The fixed allowlist of runnable actions. `var` so the operator-picked local scripts (§4d /
+    /// S33) can hot-reload it from Settings (`updateActions`) — each configured script is an ordinary
+    /// registry `Action` (fixed absolute executable, empty argv; I1). `/run` selects among them.
+    private var registry: ActionRegistry
     private let clock: Clock
     private let idleTimeout: TimeInterval
 
@@ -117,6 +122,12 @@ struct AuthGuard {
     /// a bare word never silently switches the active repo out of context (mirrors `awaitingArmCode`).
     private var awaitingRepoName = false
 
+    /// True after `/run` was sent with several scripts configured (S33): the operator was shown the
+    /// script picker, so their next bare (non-command) message — a tapped label — is consumed as the
+    /// script to run. Cleared once consumed, when a new command is issued instead, or on disarm, so a
+    /// bare word never silently runs a script out of context (mirrors `awaitingRepoName`).
+    private var awaitingScriptChoice = false
+
     init(allowlist: Set<Int64>,
          totpSecret: Data,
          registry: ActionRegistry,
@@ -145,6 +156,16 @@ struct AuthGuard {
     /// A removed id is revoked immediately — its next message fails the identity gate (invariant I2).
     mutating func updateAllowlist(_ ids: Set<Int64>) {
         allowlist = ids
+    }
+
+    /// Replaces the runnable-action registry at runtime (S33 — hot-reload the operator-picked local
+    /// scripts from the Settings pane), mirroring `updateAllowlist`/`updateRepos`. A script added or
+    /// removed in Settings takes effect immediately: a removed one can no longer be run by `/run`
+    /// (invariant I2). Arm state is preserved — the action set is orthogonal to the session. Any
+    /// pending `/run` picker is dropped, so a stale label can't select a script that was just removed.
+    mutating func updateActions(_ actions: [Action]) {
+        registry = ActionRegistry(actions: actions)
+        awaitingScriptChoice = false
     }
 
     /// Replaces the configured repo allowlist at runtime (S16 — hot-reload from Settings), mirroring
@@ -176,6 +197,7 @@ struct AuthGuard {
         activeRepo = nil
         awaitingArmCode = false             // S20: drop any pending "type your code" prompt
         awaitingRepoName = false            // S25: drop any pending "pick a repo" prompt
+        awaitingScriptChoice = false        // S33: drop any pending "pick a script" prompt
     }
 
     /// True while the armed window is still open.
@@ -224,6 +246,17 @@ struct AuthGuard {
             // A new command instead of a repo name cancels the picker — fall through and handle it.
         }
 
+        // S33: after a bare `/run` with several scripts, the next non-command message (a tapped
+        // label, or a typed one) is consumed as the script to run. A leading `/` cancels the picker.
+        if awaitingScriptChoice {
+            awaitingScriptChoice = false
+            if !token.hasPrefix("/") {
+                guard isArmed else { return .disarmed }   // session may have idled out since the prompt
+                return selectScript(labeled: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            // A new command instead of a label cancels the picker — fall through and handle it.
+        }
+
         switch token {
         case "/arm":
             return .control(handleArm(text))
@@ -243,6 +276,8 @@ struct AuthGuard {
             return .control(.repoList(repoConfigs))
         case "/claude":
             return resolveClaude(text)
+        case "/run":
+            return resolveRun()
         default:
             if let action = registry.match(text) {
                 guard isArmed else { return .disarmed }    // I2: actions run only while armed
@@ -332,6 +367,38 @@ struct AuthGuard {
         case let .invalid(reason):
             return .invalidParameters(reason)            // §4a: a repo missing config spawns nothing
         }
+    }
+
+    /// Resolves the `/run` configurable-local-script trigger (§4d / S33). Arm gate first (I2 — a
+    /// disarmed operator is told to arm, not shown which scripts exist), then: with no scripts
+    /// configured it fails closed with a reason; with exactly one it runs directly; with several it
+    /// offers the labels as a picker (the next bare message selects). The runnable actions come only
+    /// from the operator-picked registry — no path, argument, or script content ever comes from chat
+    /// (I1). Any operator text after `/run` is ignored: it never becomes an argument.
+    private mutating func resolveRun() -> Decision {
+        guard isArmed else { return .disarmed }
+        let actions = registry.actions
+        switch actions.count {
+        case 0:
+            return .invalidParameters("no scripts configured")
+        case 1:
+            extendArmedWindow()
+            return .runAction(actions[0])
+        default:
+            awaitingScriptChoice = true
+            return .control(.scriptMenu(actions))
+        }
+    }
+
+    /// Runs a configured script by exact label match (shared by the S33 `/run` picker reply). The
+    /// label selects a pre-configured registry `Action` — never a path or argument from chat (I1). A
+    /// label not on the configured allowlist is refused; nothing spawns.
+    private mutating func selectScript(labeled label: String) -> Decision {
+        guard let action = registry.actions.first(where: { $0.description == label }) else {
+            return .invalidParameters("unknown script")
+        }
+        extendArmedWindow()
+        return .runAction(action)
     }
 
     /// Resolves the `/claude` agent action (§4b / S21). Gate order mirrors the other repo-scoped

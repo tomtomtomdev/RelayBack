@@ -72,6 +72,13 @@ final class AppCoordinator {
         authGuard.updateRepos(repos)
     }
 
+    /// Applies a runtime script-allowlist change to the live guard (S33), mirroring `updateRepos`.
+    /// A script picked/removed in the Settings Scripts pane takes effect immediately without a
+    /// restart; a removed script can no longer be run by `/run` (invariant I2).
+    func updateActions(_ actions: [Action]) {
+        authGuard.updateActions(actions)
+    }
+
     /// Applies a runtime `/claude` capability change to the live guard (S22), mirroring
     /// `updateRepos`. Enabling/disabling or re-profiling the agent action in Settings takes effect
     /// immediately without a restart; disabling refuses the next `/claude` at once (invariant I5).
@@ -171,6 +178,13 @@ final class AppCoordinator {
             await reply(chatId, RepoListPresentation.selectPrompt,
                         markup: .keyboard(RepoListPresentation.pickerButtons(repos)))
             record(fromId: fromId, event: .control("cd prompt"))
+        case let .scriptMenu(actions):
+            // S33: `/run` with several scripts — offer their labels as a one-time tap keyboard. The
+            // buttons disclose only the operator-facing label (never the script path — I3); the
+            // guard consumes the next message as the picked label and runs that script.
+            await reply(chatId, ScriptListPresentation.selectPrompt,
+                        markup: .keyboard(ScriptListPresentation.pickerButtons(actions)))
+            record(fromId: fromId, event: .control("run prompt"))
         }
     }
 
